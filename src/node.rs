@@ -18,10 +18,11 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 *******************************************************************************/
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 
 use crate::types::{
-    Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_LINE, MAX_SAM_OVLP,
+    Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_SAM_OVLP,
     META_PEN, MIN_EDGE_GENE, MIN_GENE, OPER_DIST, STOP, TTG,
 };
 
@@ -49,13 +50,26 @@ extern "C" {
     fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int;
     fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int);
     fn calc_mer_bg(len: c_int, seq: *const u8, rseq: *const u8, slen: c_int, bg: *mut f64);
+}
 
-    // bitmap.rs functions
-    fn test(bm: *const u8, ndx: c_int) -> u8;
-    fn set(bm: *mut u8, ndx: c_int);
+/// Write a Rust string to a file descriptor.
+#[inline]
+unsafe fn fprint(fp: c_int, s: &str) {
+    use std::io::Write;
+    use std::os::unix::io::FromRawFd;
+    let mut f = std::fs::File::from_raw_fd(fp);
+    let _ = f.write_all(s.as_bytes());
+    std::mem::forget(f); // don't close the fd
+}
 
-    // C stderr stream
-    static stderr: *mut libc::FILE;
+/// Convert a *const c_char (C string) to a &str.  Returns "" on null.
+#[inline]
+unsafe fn cstr(p: *const c_char) -> &'static str {
+    if p.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(p).to_str().unwrap_or("")
+    }
 }
 
 /*******************************************************************************
@@ -2314,7 +2328,7 @@ pub unsafe extern "C" fn intergenic_mod(
 
 #[no_mangle]
 pub unsafe extern "C" fn write_start_file(
-    fh: *mut libc::FILE,
+    fh: c_int,
     nod: *mut Node,
     nn: c_int,
     tinf: *mut Training,
@@ -2331,274 +2345,249 @@ pub unsafe extern "C" fn write_start_file(
     let mut rbs1: f64;
     let mut rbs2: f64;
 
-    static SD_STRING: [&[u8]; 28] = [
-        b"None\0",
-        b"GGA/GAG/AGG\0",
-        b"3Base/5BMM\0",
-        b"4Base/6BMM\0",
-        b"AGxAG\0",
-        b"AGxAG\0",
-        b"GGA/GAG/AGG\0",
-        b"GGxGG\0",
-        b"GGxGG\0",
-        b"AGxAG\0",
-        b"AGGAG(G)/GGAGG\0",
-        b"AGGA/GGAG/GAGG\0",
-        b"AGGA/GGAG/GAGG\0",
-        b"GGA/GAG/AGG\0",
-        b"GGxGG\0",
-        b"AGGA\0",
-        b"GGAG/GAGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGGAG/GGAGG\0",
-        b"AGGAG\0",
-        b"AGGAG\0",
-        b"GGAGG\0",
-        b"GGAGG\0",
-        b"AGGAGG\0",
-        b"AGGAGG\0",
-        b"AGGAGG\0",
+    static SD_STRING: [&str; 28] = [
+        "None",
+        "GGA/GAG/AGG",
+        "3Base/5BMM",
+        "4Base/6BMM",
+        "AGxAG",
+        "AGxAG",
+        "GGA/GAG/AGG",
+        "GGxGG",
+        "GGxGG",
+        "AGxAG",
+        "AGGAG(G)/GGAGG",
+        "AGGA/GGAG/GAGG",
+        "AGGA/GGAG/GAGG",
+        "GGA/GAG/AGG",
+        "GGxGG",
+        "AGGA",
+        "GGAG/GAGG",
+        "AGxAGG/AGGxGG",
+        "AGxAGG/AGGxGG",
+        "AGxAGG/AGGxGG",
+        "AGGAG/GGAGG",
+        "AGGAG",
+        "AGGAG",
+        "GGAGG",
+        "GGAGG",
+        "AGGAGG",
+        "AGGAGG",
+        "AGGAGG",
     ];
-    static SD_SPACER: [&[u8]; 28] = [
-        b"None\0",
-        b"3-4bp\0",
-        b"13-15bp\0",
-        b"13-15bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"11-12bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"13-15bp\0",
-        b"3-4bp\0",
-        b"11-12bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
+    static SD_SPACER: [&str; 28] = [
+        "None",
+        "3-4bp",
+        "13-15bp",
+        "13-15bp",
+        "11-12bp",
+        "3-4bp",
+        "11-12bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "13-15bp",
+        "3-4bp",
+        "11-12bp",
+        "5-10bp",
+        "5-10bp",
+        "5-10bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "3-4bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
     ];
-    static TYPE_STRING: [&[u8]; 4] = [b"ATG\0", b"GTG\0", b"TTG\0", b"Edge\0"];
+    static TYPE_STRING: [&str; 4] = ["ATG", "GTG", "TTG", "Edge"];
 
-    let mut seq_data: [c_char; MAX_LINE * 2] = [0; MAX_LINE * 2];
-    let mut run_data: [c_char; MAX_LINE] = [0; MAX_LINE];
-    let mut buffer: [c_char; MAX_LINE] = [0; MAX_LINE];
     let mut qt: [c_char; 10] = [0; 10];
 
+    let header_str = cstr(header);
+    let version_str = cstr(version);
+
     /* Initialize sequence data */
-    libc::sprintf(
-        seq_data.as_mut_ptr(),
-        b"seqnum=%d;seqlen=%d;seqhdr=\"%s\"\0".as_ptr() as *const c_char,
-        sctr,
-        slen,
-        header,
-    );
+    let seq_data = format!("seqnum={};seqlen={};seqhdr=\"{}\"", sctr, slen, header_str);
 
     /* Initialize run data string */
+    let mut run_data;
     if is_meta == 0 {
-        libc::sprintf(
-            run_data.as_mut_ptr(),
-            b"version=Prodigal.v%s;run_type=Single;\0".as_ptr() as *const c_char,
-            version,
-        );
-        libc::strcat(
-            run_data.as_mut_ptr(),
-            b"model=\"Ab initio\";\0".as_ptr() as *const c_char,
-        );
+        run_data = format!("version=Prodigal.v{};run_type=Single;", version_str);
+        run_data.push_str("model=\"Ab initio\";");
     } else {
-        libc::sprintf(
-            run_data.as_mut_ptr(),
-            b"version=Prodigal.v%s;run_type=Metagenomic;\0".as_ptr() as *const c_char,
-            version,
-        );
-        libc::sprintf(
-            buffer.as_mut_ptr(),
-            b"model=\"%s\";\0".as_ptr() as *const c_char,
-            mdesc,
-        );
-        libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
+        let mdesc_str = cstr(mdesc);
+        run_data = format!("version=Prodigal.v{};run_type=Metagenomic;", version_str);
+        run_data.push_str(&format!("model=\"{}\";", mdesc_str));
     }
-    libc::sprintf(
-        buffer.as_mut_ptr(),
-        b"gc_cont=%.2f;transl_table=%d;uses_sd=%d\0".as_ptr() as *const c_char,
+    run_data.push_str(&format!(
+        "gc_cont={:.2};transl_table={};uses_sd={}",
         (*tinf).gc * 100.0,
         (*tinf).trans_table,
-        (*tinf).uses_sd,
-    );
-    libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
+        (*tinf).uses_sd
+    ));
 
-    libc::qsort(
-        nod as *mut c_void,
-        nn as libc::size_t,
-        std::mem::size_of::<Node>() as libc::size_t,
-        Some(stopcmp_nodes as unsafe extern "C" fn(*const c_void, *const c_void) -> c_int),
-    );
+    {
+        let nodes_slice = std::slice::from_raw_parts_mut(nod, nn as usize);
+        nodes_slice.sort_unstable_by(|a, b| {
+            a.stop_val.cmp(&b.stop_val)
+                .then(b.strand.cmp(&a.strand))
+                .then(a.ndx.cmp(&b.ndx))
+        });
+    }
 
-    libc::fprintf(
-        fh,
-        b"# Sequence Data: %s\n\0".as_ptr() as *const c_char,
-        seq_data.as_ptr(),
-    );
-    libc::fprintf(
-        fh,
-        b"# Run Data: %s\n\n\0".as_ptr() as *const c_char,
-        run_data.as_ptr(),
-    );
+    fprint(fh, &format!("# Sequence Data: {}\n", seq_data));
+    fprint(fh, &format!("# Run Data: {}\n\n", run_data));
 
-    libc::fprintf(
-        fh,
-        b"Beg\tEnd\tStd\tTotal\tCodPot\tStrtSc\tCodon\tRBSMot\t\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        fh,
-        b"Spacer\tRBSScr\tUpsScr\tTypeScr\tGCCont\n\0".as_ptr() as *const c_char,
-    );
+    fprint(fh, "Beg\tEnd\tStd\tTotal\tCodPot\tStrtSc\tCodon\tRBSMot\t");
+    fprint(fh, "Spacer\tRBSScr\tUpsScr\tTypeScr\tGCCont\n");
 
     for i in 0..nn {
-        if (*nod.offset(i as isize)).type_ == STOP {
+        let ni = &*nod.offset(i as isize);
+        if ni.type_ == STOP {
             continue;
         }
-        if (*nod.offset(i as isize)).edge == 1 {
+        if ni.edge == 1 {
             st_type = 3;
         } else {
-            st_type = (*nod.offset(i as isize)).type_;
+            st_type = ni.type_;
         }
-        if (*nod.offset(i as isize)).stop_val != prev_stop
-            || (*nod.offset(i as isize)).strand != prev_strand
+        if ni.stop_val != prev_stop
+            || ni.strand != prev_strand
         {
-            prev_stop = (*nod.offset(i as isize)).stop_val;
-            prev_strand = (*nod.offset(i as isize)).strand;
-            libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+            prev_stop = ni.stop_val;
+            prev_strand = ni.strand;
+            fprint(fh, "\n");
         }
-        if (*nod.offset(i as isize)).strand == 1 {
-            libc::fprintf(
+        if ni.strand == 1 {
+            fprint(
                 fh,
-                b"%d\t%d\t+\t%.2f\t%.2f\t%.2f\t%s\t\0".as_ptr() as *const c_char,
-                (*nod.offset(i as isize)).ndx + 1,
-                (*nod.offset(i as isize)).stop_val + 3,
-                (*nod.offset(i as isize)).cscore + (*nod.offset(i as isize)).sscore,
-                (*nod.offset(i as isize)).cscore,
-                (*nod.offset(i as isize)).sscore,
-                TYPE_STRING[st_type as usize].as_ptr() as *const c_char,
+                &format!(
+                    "{}\t{}\t+\t{:.2}\t{:.2}\t{:.2}\t{}\t",
+                    ni.ndx + 1,
+                    ni.stop_val + 3,
+                    ni.cscore + ni.sscore,
+                    ni.cscore,
+                    ni.sscore,
+                    TYPE_STRING[st_type as usize],
+                ),
             );
         }
-        if (*nod.offset(i as isize)).strand == -1 {
-            libc::fprintf(
+        if ni.strand == -1 {
+            fprint(
                 fh,
-                b"%d\t%d\t-\t%.2f\t%.2f\t%.2f\t%s\t\0".as_ptr() as *const c_char,
-                (*nod.offset(i as isize)).stop_val - 1,
-                (*nod.offset(i as isize)).ndx + 1,
-                (*nod.offset(i as isize)).cscore + (*nod.offset(i as isize)).sscore,
-                (*nod.offset(i as isize)).cscore,
-                (*nod.offset(i as isize)).sscore,
-                TYPE_STRING[st_type as usize].as_ptr() as *const c_char,
+                &format!(
+                    "{}\t{}\t-\t{:.2}\t{:.2}\t{:.2}\t{}\t",
+                    ni.stop_val - 1,
+                    ni.ndx + 1,
+                    ni.cscore + ni.sscore,
+                    ni.cscore,
+                    ni.sscore,
+                    TYPE_STRING[st_type as usize],
+                ),
             );
         }
         rbs1 =
-            (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[0] as usize] * (*tinf).st_wt;
+            (*tinf).rbs_wt[ni.rbs[0] as usize] * (*tinf).st_wt;
         rbs2 =
-            (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[1] as usize] * (*tinf).st_wt;
+            (*tinf).rbs_wt[ni.rbs[1] as usize] * (*tinf).st_wt;
         if (*tinf).uses_sd == 1 {
             if rbs1 > rbs2 {
-                libc::fprintf(
+                fprint(
                     fh,
-                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
-                    SD_STRING[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
-                        as *const c_char,
-                    SD_SPACER[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
-                        as *const c_char,
-                    (*nod.offset(i as isize)).rscore,
+                    &format!(
+                        "{}\t{}\t{:.2}\t",
+                        SD_STRING[ni.rbs[0] as usize],
+                        SD_SPACER[ni.rbs[0] as usize],
+                        ni.rscore,
+                    ),
                 );
             } else {
-                libc::fprintf(
+                fprint(
                     fh,
-                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
-                    SD_STRING[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
-                        as *const c_char,
-                    SD_SPACER[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
-                        as *const c_char,
-                    (*nod.offset(i as isize)).rscore,
+                    &format!(
+                        "{}\t{}\t{:.2}\t",
+                        SD_STRING[ni.rbs[1] as usize],
+                        SD_SPACER[ni.rbs[1] as usize],
+                        ni.rscore,
+                    ),
                 );
             }
         } else {
             mer_text(
                 qt.as_mut_ptr(),
-                (*nod.offset(i as isize)).mot.len,
-                (*nod.offset(i as isize)).mot.ndx,
+                ni.mot.len,
+                ni.mot.ndx,
             );
+            let qt_str = cstr(qt.as_ptr());
             if (*tinf).no_mot > -0.5
                 && rbs1 > rbs2
-                && rbs1 > (*nod.offset(i as isize)).mot.score * (*tinf).st_wt
+                && rbs1 > ni.mot.score * (*tinf).st_wt
             {
-                libc::fprintf(
+                fprint(
                     fh,
-                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
-                    SD_STRING[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
-                        as *const c_char,
-                    SD_SPACER[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
-                        as *const c_char,
-                    (*nod.offset(i as isize)).rscore,
+                    &format!(
+                        "{}\t{}\t{:.2}\t",
+                        SD_STRING[ni.rbs[0] as usize],
+                        SD_SPACER[ni.rbs[0] as usize],
+                        ni.rscore,
+                    ),
                 );
             } else if (*tinf).no_mot > -0.5
                 && rbs2 >= rbs1
-                && rbs2 > (*nod.offset(i as isize)).mot.score * (*tinf).st_wt
+                && rbs2 > ni.mot.score * (*tinf).st_wt
             {
-                libc::fprintf(
+                fprint(
                     fh,
-                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
-                    SD_STRING[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
-                        as *const c_char,
-                    SD_SPACER[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
-                        as *const c_char,
-                    (*nod.offset(i as isize)).rscore,
+                    &format!(
+                        "{}\t{}\t{:.2}\t",
+                        SD_STRING[ni.rbs[1] as usize],
+                        SD_SPACER[ni.rbs[1] as usize],
+                        ni.rscore,
+                    ),
                 );
             } else {
-                if (*nod.offset(i as isize)).mot.len == 0 {
-                    libc::fprintf(
+                if ni.mot.len == 0 {
+                    fprint(
                         fh,
-                        b"None\tNone\t%.2f\t\0".as_ptr() as *const c_char,
-                        (*nod.offset(i as isize)).rscore,
+                        &format!("None\tNone\t{:.2}\t", ni.rscore),
                     );
                 } else {
-                    libc::fprintf(
+                    fprint(
                         fh,
-                        b"%s\t%dbp\t%.2f\t\0".as_ptr() as *const c_char,
-                        qt.as_ptr(),
-                        (*nod.offset(i as isize)).mot.spacer,
-                        (*nod.offset(i as isize)).rscore,
+                        &format!(
+                            "{}\t{}bp\t{:.2}\t",
+                            qt_str,
+                            ni.mot.spacer,
+                            ni.rscore,
+                        ),
                     );
                 }
             }
         }
-        libc::fprintf(
+        fprint(
             fh,
-            b"%.2f\t%.2f\t%.3f\n\0".as_ptr() as *const c_char,
-            (*nod.offset(i as isize)).uscore,
-            (*nod.offset(i as isize)).tscore,
-            (*nod.offset(i as isize)).gc_cont,
+            &format!(
+                "{:.2}\t{:.2}\t{:.3}\n",
+                ni.uscore,
+                ni.tscore,
+                ni.gc_cont,
+            ),
         );
     }
-    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+    fprint(fh, "\n");
 
-    libc::qsort(
-        nod as *mut c_void,
-        nn as libc::size_t,
-        std::mem::size_of::<Node>() as libc::size_t,
-        Some(compare_nodes as unsafe extern "C" fn(*const c_void, *const c_void) -> c_int),
-    );
+    {
+        let nodes_slice = std::slice::from_raw_parts_mut(nod, nn as usize);
+        nodes_slice.sort_unstable_by(|a, b| {
+            a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand))
+        });
+    }
 }
 
 /* Checks to see if a node boundary crosses a mask */

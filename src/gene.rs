@@ -7,9 +7,10 @@
     Rust translation maintaining exact C ABI and output compatibility.
 *******************************************************************************/
 
-use std::os::raw::{c_char, c_double, c_int};
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_int};
 
-use crate::types::{Gene, Node, Training, MAX_GENES, MAX_LINE, MAX_SAM_OVLP, STOP};
+use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SAM_OVLP, STOP};
 
 extern "C" {
     fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64;
@@ -21,8 +22,53 @@ extern "C" {
     fn amino(seq: *const u8, n: c_int, tinf: *mut Training, is_init: c_int) -> c_char;
     fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int);
     // fn start_text(st: *mut c_char, type_: c_int);
+}
 
-    static stderr: *mut libc::FILE;
+/// Write a Rust string to a file descriptor.
+#[inline]
+unsafe fn fprint(fd: c_int, s: &str) {
+    use std::io::Write;
+    use std::os::unix::io::FromRawFd;
+    let mut f = std::fs::File::from_raw_fd(fd);
+    let _ = f.write_all(s.as_bytes());
+    std::mem::forget(f); // don't close the fd
+}
+
+/// Convert a *const c_char (C string) to a &str.  Returns "" on null.
+#[inline]
+unsafe fn cstr(p: *const c_char) -> &'static str {
+    if p.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(p).to_str().unwrap_or("")
+    }
+}
+
+/// Copy a Rust string into a c_char buffer, NUL-terminated.
+#[inline]
+unsafe fn copy_to_cbuf(buf: &mut [c_char], s: &str) {
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(buf.len() - 1);
+    for i in 0..len {
+        buf[i] = bytes[i] as c_char;
+    }
+    buf[len] = 0;
+}
+
+/// Append a Rust string to an existing NUL-terminated c_char buffer.
+#[inline]
+unsafe fn append_to_cbuf(buf: &mut [c_char], s: &str) {
+    // Find current NUL position
+    let mut pos = 0usize;
+    while pos < buf.len() && buf[pos] != 0 {
+        pos += 1;
+    }
+    let bytes = s.as_bytes();
+    let len = bytes.len().min(buf.len() - 1 - pos);
+    for i in 0..len {
+        buf[pos + i] = bytes[i] as c_char;
+    }
+    buf[pos + len] = 0;
 }
 
 /// Copies genes from the dynamic programming to a final array.
@@ -69,10 +115,7 @@ pub unsafe extern "C" fn add_genes(
         }
         path = (*nod.offset(path as isize)).tracef;
         if ctr == MAX_GENES as c_int {
-            libc::fprintf(
-                stderr,
-                b"warning, max # of genes exceeded, truncating...\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("warning, max # of genes exceeded, truncating...\n");
             return ctr;
         }
     }
@@ -322,71 +365,70 @@ pub unsafe extern "C" fn record_gene_data(
     sctr: c_int,
 ) {
     // SD motif string tables
-    let sd_string: [&[u8]; 28] = [
-        b"None\0",
-        b"GGA/GAG/AGG\0",
-        b"3Base/5BMM\0",
-        b"4Base/6BMM\0",
-        b"AGxAG\0",
-        b"AGxAG\0",
-        b"GGA/GAG/AGG\0",
-        b"GGxGG\0",
-        b"GGxGG\0",
-        b"AGxAG\0",
-        b"AGGAG(G)/GGAGG\0",
-        b"AGGA/GGAG/GAGG\0",
-        b"AGGA/GGAG/GAGG\0",
-        b"GGA/GAG/AGG\0",
-        b"GGxGG\0",
-        b"AGGA\0",
-        b"GGAG/GAGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGxAGG/AGGxGG\0",
-        b"AGGAG/GGAGG\0",
-        b"AGGAG\0",
-        b"AGGAG\0",
-        b"GGAGG\0",
-        b"GGAGG\0",
-        b"AGGAGG\0",
-        b"AGGAGG\0",
-        b"AGGAGG\0",
+    let sd_string: [&str; 28] = [
+        "None",
+        "GGA/GAG/AGG",
+        "3Base/5BMM",
+        "4Base/6BMM",
+        "AGxAG",
+        "AGxAG",
+        "GGA/GAG/AGG",
+        "GGxGG",
+        "GGxGG",
+        "AGxAG",
+        "AGGAG(G)/GGAGG",
+        "AGGA/GGAG/GAGG",
+        "AGGA/GGAG/GAGG",
+        "GGA/GAG/AGG",
+        "GGxGG",
+        "AGGA",
+        "GGAG/GAGG",
+        "AGxAGG/AGGxGG",
+        "AGxAGG/AGGxGG",
+        "AGxAGG/AGGxGG",
+        "AGGAG/GGAGG",
+        "AGGAG",
+        "AGGAG",
+        "GGAGG",
+        "GGAGG",
+        "AGGAGG",
+        "AGGAGG",
+        "AGGAGG",
     ];
 
-    let sd_spacer: [&[u8]; 28] = [
-        b"None\0",
-        b"3-4bp\0",
-        b"13-15bp\0",
-        b"13-15bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"11-12bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"13-15bp\0",
-        b"3-4bp\0",
-        b"11-12bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
-        b"11-12bp\0",
-        b"3-4bp\0",
-        b"5-10bp\0",
+    let sd_spacer: [&str; 28] = [
+        "None",
+        "3-4bp",
+        "13-15bp",
+        "13-15bp",
+        "11-12bp",
+        "3-4bp",
+        "11-12bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "13-15bp",
+        "3-4bp",
+        "11-12bp",
+        "5-10bp",
+        "5-10bp",
+        "5-10bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
+        "3-4bp",
+        "5-10bp",
+        "11-12bp",
+        "3-4bp",
+        "5-10bp",
     ];
 
-    let type_string: [&[u8]; 4] = [b"ATG\0", b"GTG\0", b"TTG\0", b"Edge\0"];
+    let type_string: [&str; 4] = ["ATG", "GTG", "TTG", "Edge"];
 
-    let mut buffer: [c_char; 500] = [0; 500];
     let mut qt: [c_char; 10] = [0; 10];
 
     for i in 0..ng {
@@ -413,15 +455,11 @@ pub unsafe extern "C" fn record_gene_data(
         };
         let st_type: c_int = if n.edge == 1 { 3 } else { n.type_ };
 
-        libc::sprintf(
-            gi.gene_data.as_mut_ptr(),
-            b"ID=%d_%d;partial=%d%d;start_type=%s;\0".as_ptr() as *const c_char,
-            sctr,
-            i + 1,
-            partial_left,
-            partial_right,
-            type_string[st_type as usize].as_ptr() as *const c_char,
+        let s = format!(
+            "ID={}_{};partial={}{};start_type={};",
+            sctr, i + 1, partial_left, partial_right, type_string[st_type as usize]
         );
+        copy_to_cbuf(&mut gi.gene_data, &s);
 
         // Record rbs data
         let rbs1 = (*tinf).rbs_wt[n.rbs[0] as usize] * (*tinf).st_wt;
@@ -429,116 +467,69 @@ pub unsafe extern "C" fn record_gene_data(
 
         if (*tinf).uses_sd == 1 {
             if rbs1 > rbs2 {
-                libc::sprintf(
-                    buffer.as_mut_ptr(),
-                    b"rbs_motif=%s;rbs_spacer=%s\0".as_ptr() as *const c_char,
-                    sd_string[n.rbs[0] as usize].as_ptr() as *const c_char,
-                    sd_spacer[n.rbs[0] as usize].as_ptr() as *const c_char,
+                let s = format!(
+                    "rbs_motif={};rbs_spacer={}",
+                    sd_string[n.rbs[0] as usize], sd_spacer[n.rbs[0] as usize]
                 );
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    buffer.as_ptr(),
-                );
+                append_to_cbuf(&mut gi.gene_data, &s);
             } else {
-                libc::sprintf(
-                    buffer.as_mut_ptr(),
-                    b"rbs_motif=%s;rbs_spacer=%s\0".as_ptr() as *const c_char,
-                    sd_string[n.rbs[1] as usize].as_ptr() as *const c_char,
-                    sd_spacer[n.rbs[1] as usize].as_ptr() as *const c_char,
+                let s = format!(
+                    "rbs_motif={};rbs_spacer={}",
+                    sd_string[n.rbs[1] as usize], sd_spacer[n.rbs[1] as usize]
                 );
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    buffer.as_ptr(),
-                );
+                append_to_cbuf(&mut gi.gene_data, &s);
             }
         } else {
             mer_text(qt.as_mut_ptr(), n.mot.len, n.mot.ndx);
+            let qt_str = cstr(qt.as_ptr());
             if (*tinf).no_mot > -0.5
                 && rbs1 > rbs2
                 && rbs1 > n.mot.score * (*tinf).st_wt
             {
-                libc::sprintf(
-                    buffer.as_mut_ptr(),
-                    b"rbs_motif=%s;rbs_spacer=%s\0".as_ptr() as *const c_char,
-                    sd_string[n.rbs[0] as usize].as_ptr() as *const c_char,
-                    sd_spacer[n.rbs[0] as usize].as_ptr() as *const c_char,
+                let s = format!(
+                    "rbs_motif={};rbs_spacer={}",
+                    sd_string[n.rbs[0] as usize], sd_spacer[n.rbs[0] as usize]
                 );
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    buffer.as_ptr(),
-                );
+                append_to_cbuf(&mut gi.gene_data, &s);
             } else if (*tinf).no_mot > -0.5
                 && rbs2 >= rbs1
                 && rbs2 > n.mot.score * (*tinf).st_wt
             {
-                libc::sprintf(
-                    buffer.as_mut_ptr(),
-                    b"rbs_motif=%s;rbs_spacer=%s\0".as_ptr() as *const c_char,
-                    sd_string[n.rbs[1] as usize].as_ptr() as *const c_char,
-                    sd_spacer[n.rbs[1] as usize].as_ptr() as *const c_char,
+                let s = format!(
+                    "rbs_motif={};rbs_spacer={}",
+                    sd_string[n.rbs[1] as usize], sd_spacer[n.rbs[1] as usize]
                 );
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    buffer.as_ptr(),
-                );
+                append_to_cbuf(&mut gi.gene_data, &s);
             } else if n.mot.len == 0 {
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    b"rbs_motif=None;rbs_spacer=None\0".as_ptr() as *const c_char,
-                );
+                append_to_cbuf(&mut gi.gene_data, "rbs_motif=None;rbs_spacer=None");
             } else {
-                libc::sprintf(
-                    buffer.as_mut_ptr(),
-                    b"rbs_motif=%s;rbs_spacer=%dbp\0".as_ptr() as *const c_char,
-                    qt.as_ptr() as *const c_char,
-                    n.mot.spacer,
+                let s = format!(
+                    "rbs_motif={};rbs_spacer={}bp",
+                    qt_str, n.mot.spacer
                 );
-                libc::strcat(
-                    gi.gene_data.as_mut_ptr(),
-                    buffer.as_ptr(),
-                );
+                append_to_cbuf(&mut gi.gene_data, &s);
             }
         }
-        libc::sprintf(
-            buffer.as_mut_ptr(),
-            b";gc_cont=%.3f\0".as_ptr() as *const c_char,
-            n.gc_cont as c_double,
-        );
-        libc::strcat(
-            gi.gene_data.as_mut_ptr(),
-            buffer.as_ptr(),
-        );
+        let gc_s = format!(";gc_cont={:.3}", n.gc_cont);
+        append_to_cbuf(&mut gi.gene_data, &gc_s);
 
         // Record score data
         let confidence = calculate_confidence(n.cscore + n.sscore, (*tinf).st_wt);
-        libc::sprintf(
-            gi.score_data.as_mut_ptr(),
-            b"conf=%.2f;score=%.2f;cscore=%.2f;sscore=%.2f;rscore=%.2f;uscore=%.2f;\0".as_ptr()
-                as *const c_char,
-            confidence as c_double,
-            (n.cscore + n.sscore) as c_double,
-            n.cscore as c_double,
-            n.sscore as c_double,
-            n.rscore as c_double,
-            n.uscore as c_double,
+        let s = format!(
+            "conf={:.2};score={:.2};cscore={:.2};sscore={:.2};rscore={:.2};uscore={:.2};",
+            confidence, n.cscore + n.sscore, n.cscore, n.sscore, n.rscore, n.uscore
         );
+        copy_to_cbuf(&mut gi.score_data, &s);
 
-        libc::sprintf(
-            buffer.as_mut_ptr(),
-            b"tscore=%.2f;\0".as_ptr() as *const c_char,
-            n.tscore as c_double,
-        );
-        libc::strcat(
-            gi.score_data.as_mut_ptr(),
-            buffer.as_ptr(),
-        );
+        let s = format!("tscore={:.2};", n.tscore);
+        append_to_cbuf(&mut gi.score_data, &s);
     }
 }
 
 /// Print the genes. 'flag' indicates which format to use.
 #[no_mangle]
 pub unsafe extern "C" fn print_genes(
-    fp: *mut libc::FILE,
+    fp: c_int,
     genes: *mut Gene,
     ng: c_int,
     nod: *mut Node,
@@ -552,85 +543,42 @@ pub unsafe extern "C" fn print_genes(
     short_hdr: *mut c_char,
     version: *mut c_char,
 ) {
-    let mut left: [c_char; 50] = [0; 50];
-    let mut right: [c_char; 50] = [0; 50];
-    let mut seq_data: [c_char; MAX_LINE * 2] = [0; MAX_LINE * 2];
-    let mut run_data: [c_char; MAX_LINE] = [0; MAX_LINE];
-    let mut buffer: [c_char; MAX_LINE] = [0; MAX_LINE];
+    let header_str = cstr(header);
+    let short_hdr_str = cstr(short_hdr);
+    let version_str = cstr(version);
 
     // Initialize sequence data
-    libc::sprintf(
-        seq_data.as_mut_ptr(),
-        b"seqnum=%d;seqlen=%d;seqhdr=\"%s\"\0".as_ptr() as *const c_char,
-        sctr,
-        slen,
-        header,
-    );
+    let seq_data = format!("seqnum={};seqlen={};seqhdr=\"{}\"", sctr, slen, header_str);
 
     // Initialize run data string
+    let mut run_data;
     if is_meta == 0 {
-        libc::sprintf(
-            run_data.as_mut_ptr(),
-            b"version=Prodigal.v%s;run_type=Single;\0".as_ptr() as *const c_char,
-            version,
-        );
-        libc::strcat(
-            run_data.as_mut_ptr(),
-            b"model=\"Ab initio\";\0".as_ptr() as *const c_char,
-        );
+        run_data = format!("version=Prodigal.v{};run_type=Single;", version_str);
+        run_data.push_str("model=\"Ab initio\";");
     } else {
-        libc::sprintf(
-            run_data.as_mut_ptr(),
-            b"version=Prodigal.v%s;run_type=Metagenomic;\0".as_ptr() as *const c_char,
-            version,
-        );
-        libc::sprintf(
-            buffer.as_mut_ptr(),
-            b"model=\"%s\";\0".as_ptr() as *const c_char,
-            mdesc,
-        );
-        libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
+        let mdesc_str = cstr(mdesc);
+        run_data = format!("version=Prodigal.v{};run_type=Metagenomic;", version_str);
+        run_data.push_str(&format!("model=\"{}\";", mdesc_str));
     }
-    libc::sprintf(
-        buffer.as_mut_ptr(),
-        b"gc_cont=%.2f;transl_table=%d;uses_sd=%d\0".as_ptr() as *const c_char,
-        ((*tinf).gc * 100.0) as c_double,
+    run_data.push_str(&format!(
+        "gc_cont={:.2};transl_table={};uses_sd={}",
+        (*tinf).gc * 100.0,
         (*tinf).trans_table,
-        (*tinf).uses_sd,
-    );
-    libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
-
-    left[0] = 0;
-    right[0] = 0;
+        (*tinf).uses_sd
+    ));
 
     // Print the gff header once
     if flag == 3 && sctr == 1 {
-        libc::fprintf(fp, b"##gff-version  3\n\0".as_ptr() as *const c_char);
+        fprint(fp, "##gff-version  3\n");
     }
 
     // Print sequence/model information
     if flag == 0 {
-        libc::fprintf(
-            fp,
-            b"DEFINITION  %s;%s\n\0".as_ptr() as *const c_char,
-            seq_data.as_ptr(),
-            run_data.as_ptr(),
-        );
-        libc::fprintf(
-            fp,
-            b"FEATURES             Location/Qualifiers\n\0".as_ptr() as *const c_char,
-        );
+        fprint(fp, &format!("DEFINITION  {};{}\n", seq_data, run_data));
+        fprint(fp, "FEATURES             Location/Qualifiers\n");
     } else if flag != 1 {
-        libc::fprintf(
-            fp,
-            b"# Sequence Data: %s\n\0".as_ptr() as *const c_char,
-            seq_data.as_ptr(),
-        );
-        libc::fprintf(
-            fp,
-            b"# Model Data: %s\n\0".as_ptr() as *const c_char,
-            run_data.as_ptr(),
-        );
+        fprint(fp, &format!("# Sequence Data: {}\n", seq_data));
+        fprint(fp, &format!("# Model Data: {}\n", run_data));
     }
 
     // Print the genes
@@ -641,184 +589,120 @@ pub unsafe extern "C" fn print_genes(
         let n = &*nod.offset(ndx as isize);
         let sn = &*nod.offset(sndx as isize);
 
+        let gene_data_str = cstr(gi.gene_data.as_ptr());
+        let score_data_str = cstr(gi.score_data.as_ptr());
+
         // Print the coordinates and data
         if n.strand == 1 {
-            if n.edge == 1 {
-                libc::sprintf(
-                    left.as_mut_ptr(),
-                    b"<%d\0".as_ptr() as *const c_char,
-                    gi.begin,
-                );
+            let left = if n.edge == 1 {
+                format!("<{}", gi.begin)
             } else {
-                libc::sprintf(
-                    left.as_mut_ptr(),
-                    b"%d\0".as_ptr() as *const c_char,
-                    gi.begin,
-                );
-            }
-            if sn.edge == 1 {
-                libc::sprintf(
-                    right.as_mut_ptr(),
-                    b">%d\0".as_ptr() as *const c_char,
-                    gi.end,
-                );
+                format!("{}", gi.begin)
+            };
+            let right = if sn.edge == 1 {
+                format!(">{}", gi.end)
             } else {
-                libc::sprintf(
-                    right.as_mut_ptr(),
-                    b"%d\0".as_ptr() as *const c_char,
-                    gi.end,
-                );
-            }
+                format!("{}", gi.end)
+            };
 
             if flag == 0 {
-                libc::fprintf(
-                    fp,
-                    b"     CDS             %s..%s\n\0".as_ptr() as *const c_char,
-                    left.as_ptr(),
-                    right.as_ptr(),
-                );
-                libc::fprintf(
-                    fp,
-                    b"                     \0".as_ptr() as *const c_char,
-                );
-                libc::fprintf(
-                    fp,
-                    b"/note=\"%s;%s\"\n\0".as_ptr() as *const c_char,
-                    gi.gene_data.as_ptr(),
-                    gi.score_data.as_ptr(),
-                );
+                fprint(fp, &format!("     CDS             {}..{}\n", left, right));
+                fprint(fp, "                     ");
+                fprint(fp, &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str));
             }
             if flag == 1 {
-                libc::fprintf(
+                fprint(
                     fp,
-                    b"gene_prodigal=%d|1|f|y|y|3|0|%d|%d|%d|%d|-1|-1|1.0\n\0".as_ptr()
-                        as *const c_char,
-                    i + 1,
-                    gi.begin,
-                    gi.end,
-                    gi.begin,
-                    gi.end,
+                    &format!(
+                        "gene_prodigal={}|1|f|y|y|3|0|{}|{}|{}|{}|-1|-1|1.0\n",
+                        i + 1, gi.begin, gi.end, gi.begin, gi.end
+                    ),
                 );
             }
             if flag == 2 {
-                libc::fprintf(
-                    fp,
-                    b">%d_%d_%d_+\n\0".as_ptr() as *const c_char,
-                    i + 1,
-                    gi.begin,
-                    gi.end,
-                );
+                fprint(fp, &format!(">{}_{}_{}_{}\n", i + 1, gi.begin, gi.end, "+"));
             }
             if flag == 3 {
-                libc::fprintf(
+                fprint(
                     fp,
-                    b"%s\tProdigal_v%s\tCDS\t%d\t%d\t%.1f\t+\t0\t%s;%s\0".as_ptr()
-                        as *const c_char,
-                    short_hdr,
-                    version,
-                    gi.begin,
-                    gi.end,
-                    (n.cscore + n.sscore) as c_double,
-                    gi.gene_data.as_ptr(),
-                    gi.score_data.as_ptr(),
+                    &format!(
+                        "{}\tProdigal_v{}\tCDS\t{}\t{}\t{:.1}\t+\t0\t{};{}",
+                        short_hdr_str,
+                        version_str,
+                        gi.begin,
+                        gi.end,
+                        n.cscore + n.sscore,
+                        gene_data_str,
+                        score_data_str
+                    ),
                 );
-                libc::fprintf(fp, b"\n\0".as_ptr() as *const c_char);
+                fprint(fp, "\n");
             }
         } else {
-            if sn.edge == 1 {
-                libc::sprintf(
-                    left.as_mut_ptr(),
-                    b"<%d\0".as_ptr() as *const c_char,
-                    gi.begin,
-                );
+            let left = if sn.edge == 1 {
+                format!("<{}", gi.begin)
             } else {
-                libc::sprintf(
-                    left.as_mut_ptr(),
-                    b"%d\0".as_ptr() as *const c_char,
-                    gi.begin,
-                );
-            }
-            if n.edge == 1 {
-                libc::sprintf(
-                    right.as_mut_ptr(),
-                    b">%d\0".as_ptr() as *const c_char,
-                    gi.end,
-                );
+                format!("{}", gi.begin)
+            };
+            let right = if n.edge == 1 {
+                format!(">{}", gi.end)
             } else {
-                libc::sprintf(
-                    right.as_mut_ptr(),
-                    b"%d\0".as_ptr() as *const c_char,
-                    gi.end,
-                );
-            }
+                format!("{}", gi.end)
+            };
 
             if flag == 0 {
-                libc::fprintf(
+                fprint(
                     fp,
-                    b"     CDS             complement(%s..%s)\n\0".as_ptr() as *const c_char,
-                    left.as_ptr(),
-                    right.as_ptr(),
+                    &format!("     CDS             complement({}..{})\n", left, right),
                 );
-                libc::fprintf(
-                    fp,
-                    b"                     \0".as_ptr() as *const c_char,
-                );
-                libc::fprintf(
-                    fp,
-                    b"/note=\"%s;%s\"\n\0".as_ptr() as *const c_char,
-                    gi.gene_data.as_ptr(),
-                    gi.score_data.as_ptr(),
-                );
+                fprint(fp, "                     ");
+                fprint(fp, &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str));
             }
             if flag == 1 {
-                libc::fprintf(
+                fprint(
                     fp,
-                    b"gene_prodigal=%d|1|r|y|y|3|0|%d|%d|%d|%d|-1|-1|1.0\n\0".as_ptr()
-                        as *const c_char,
-                    i + 1,
-                    slen + 1 - gi.end,
-                    slen + 1 - gi.begin,
-                    slen + 1 - gi.end,
-                    slen + 1 - gi.begin,
+                    &format!(
+                        "gene_prodigal={}|1|r|y|y|3|0|{}|{}|{}|{}|-1|-1|1.0\n",
+                        i + 1,
+                        slen + 1 - gi.end,
+                        slen + 1 - gi.begin,
+                        slen + 1 - gi.end,
+                        slen + 1 - gi.begin
+                    ),
                 );
             }
             if flag == 2 {
-                libc::fprintf(
-                    fp,
-                    b">%d_%d_%d_-\n\0".as_ptr() as *const c_char,
-                    i + 1,
-                    gi.begin,
-                    gi.end,
-                );
+                fprint(fp, &format!(">{}_{}_{}_{}\n", i + 1, gi.begin, gi.end, "-"));
             }
             if flag == 3 {
-                libc::fprintf(
+                fprint(
                     fp,
-                    b"%s\tProdigal_v%s\tCDS\t%d\t%d\t%.1f\t-\t0\t%s;%s\0".as_ptr()
-                        as *const c_char,
-                    short_hdr,
-                    version,
-                    gi.begin,
-                    gi.end,
-                    (n.cscore + n.sscore) as c_double,
-                    gi.gene_data.as_ptr(),
-                    gi.score_data.as_ptr(),
+                    &format!(
+                        "{}\tProdigal_v{}\tCDS\t{}\t{}\t{:.1}\t-\t0\t{};{}",
+                        short_hdr_str,
+                        version_str,
+                        gi.begin,
+                        gi.end,
+                        n.cscore + n.sscore,
+                        gene_data_str,
+                        score_data_str
+                    ),
                 );
-                libc::fprintf(fp, b"\n\0".as_ptr() as *const c_char);
+                fprint(fp, "\n");
             }
         }
     }
 
     // Footer
     if flag == 0 {
-        libc::fprintf(fp, b"//\n\0".as_ptr() as *const c_char);
+        fprint(fp, "//\n");
     }
 }
 
 /// Print the gene translations.
 #[no_mangle]
 pub unsafe extern "C" fn write_translations(
-    fh: *mut libc::FILE,
+    fh: c_int,
     genes: *mut Gene,
     ng: c_int,
     nod: *mut Node,
@@ -830,48 +714,44 @@ pub unsafe extern "C" fn write_translations(
     sctr: c_int,
     short_hdr: *mut c_char,
 ) {
+    let short_hdr_str = cstr(short_hdr);
+
     for i in 0..ng {
         let gi = &*genes.offset(i as isize);
+        let gene_data_str = cstr(gi.gene_data.as_ptr());
         if (*nod.offset(gi.start_ndx as isize)).strand == 1 {
-            libc::fprintf(
+            fprint(
                 fh,
-                b">%s_%d # %d # %d # 1 # %s\n\0".as_ptr() as *const c_char,
-                short_hdr,
-                i + 1,
-                gi.begin,
-                gi.end,
-                gi.gene_data.as_ptr(),
+                &format!(
+                    ">{}_{} # {} # {} # 1 # {}\n",
+                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                ),
             );
             let mut j = gi.begin;
             while j < gi.end {
                 if is_n(useq, j - 1) == 1 || is_n(useq, j) == 1 || is_n(useq, j + 1) == 1 {
-                    libc::fprintf(fh, b"X\0".as_ptr() as *const c_char);
+                    fprint(fh, "X");
                 } else {
                     let is_init = if j == gi.begin { 1 } else { 0 };
                     let edge_val = 1 - (*nod.offset(gi.start_ndx as isize)).edge;
-                    libc::fprintf(
-                        fh,
-                        b"%c\0".as_ptr() as *const c_char,
-                        amino(seq, j - 1, tinf, is_init & edge_val) as c_int,
-                    );
+                    let ch = amino(seq, j - 1, tinf, is_init & edge_val) as u8 as char;
+                    fprint(fh, &format!("{}", ch));
                 }
                 if (j - gi.begin) % 180 == 177 {
-                    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                    fprint(fh, "\n");
                 }
                 j += 3;
             }
             if (j - gi.begin) % 180 != 0 {
-                libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                fprint(fh, "\n");
             }
         } else {
-            libc::fprintf(
+            fprint(
                 fh,
-                b">%s_%d # %d # %d # -1 # %s\n\0".as_ptr() as *const c_char,
-                short_hdr,
-                i + 1,
-                gi.begin,
-                gi.end,
-                gi.gene_data.as_ptr(),
+                &format!(
+                    ">{}_{} # {} # {} # -1 # {}\n",
+                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                ),
             );
             let mut j = slen + 1 - gi.end;
             while j < slen + 1 - gi.begin {
@@ -879,23 +759,20 @@ pub unsafe extern "C" fn write_translations(
                     || is_n(useq, slen - 1 - j) == 1
                     || is_n(useq, slen - 2 - j) == 1
                 {
-                    libc::fprintf(fh, b"X\0".as_ptr() as *const c_char);
+                    fprint(fh, "X");
                 } else {
                     let is_init = if j == slen + 1 - gi.end { 1 } else { 0 };
                     let edge_val = 1 - (*nod.offset(gi.start_ndx as isize)).edge;
-                    libc::fprintf(
-                        fh,
-                        b"%c\0".as_ptr() as *const c_char,
-                        amino(rseq, j - 1, tinf, is_init & edge_val) as c_int,
-                    );
+                    let ch = amino(rseq, j - 1, tinf, is_init & edge_val) as u8 as char;
+                    fprint(fh, &format!("{}", ch));
                 }
                 if (j - slen - 1 + gi.end) % 180 == 177 {
-                    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                    fprint(fh, "\n");
                 }
                 j += 3;
             }
             if (j - slen - 1 + gi.end) % 180 != 0 {
-                libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                fprint(fh, "\n");
             }
         }
     }
@@ -904,7 +781,7 @@ pub unsafe extern "C" fn write_translations(
 /// Print the gene nucleotide sequences.
 #[no_mangle]
 pub unsafe extern "C" fn write_nucleotide_seqs(
-    fh: *mut libc::FILE,
+    fh: c_int,
     genes: *mut Gene,
     ng: c_int,
     nod: *mut Node,
@@ -916,69 +793,68 @@ pub unsafe extern "C" fn write_nucleotide_seqs(
     sctr: c_int,
     short_hdr: *mut c_char,
 ) {
+    let short_hdr_str = cstr(short_hdr);
+
     for i in 0..ng {
         let gi = &*genes.offset(i as isize);
+        let gene_data_str = cstr(gi.gene_data.as_ptr());
         if (*nod.offset(gi.start_ndx as isize)).strand == 1 {
-            libc::fprintf(
+            fprint(
                 fh,
-                b">%s_%d # %d # %d # 1 # %s\n\0".as_ptr() as *const c_char,
-                short_hdr,
-                i + 1,
-                gi.begin,
-                gi.end,
-                gi.gene_data.as_ptr(),
+                &format!(
+                    ">{}_{} # {} # {} # 1 # {}\n",
+                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                ),
             );
             let mut j = gi.begin - 1;
             while j < gi.end {
                 if is_a(seq, j) == 1 {
-                    libc::fprintf(fh, b"A\0".as_ptr() as *const c_char);
+                    fprint(fh, "A");
                 } else if is_t(seq, j) == 1 {
-                    libc::fprintf(fh, b"T\0".as_ptr() as *const c_char);
+                    fprint(fh, "T");
                 } else if is_g(seq, j) == 1 {
-                    libc::fprintf(fh, b"G\0".as_ptr() as *const c_char);
+                    fprint(fh, "G");
                 } else if is_c(seq, j) == 1 && is_n(useq, j) == 0 {
-                    libc::fprintf(fh, b"C\0".as_ptr() as *const c_char);
+                    fprint(fh, "C");
                 } else {
-                    libc::fprintf(fh, b"N\0".as_ptr() as *const c_char);
+                    fprint(fh, "N");
                 }
                 if (j - gi.begin + 1) % 70 == 69 {
-                    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                    fprint(fh, "\n");
                 }
                 j += 1;
             }
             if (j - gi.begin + 1) % 70 != 0 {
-                libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                fprint(fh, "\n");
             }
         } else {
-            libc::fprintf(
+            fprint(
                 fh,
-                b">%s_%d # %d # %d # -1 # %s\n\0".as_ptr() as *const c_char,
-                short_hdr,
-                i + 1,
-                gi.begin,
-                gi.end,
-                gi.gene_data.as_ptr(),
+                &format!(
+                    ">{}_{} # {} # {} # -1 # {}\n",
+                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                ),
             );
             let mut j = slen - gi.end;
             while j < slen + 1 - gi.begin {
                 if is_a(rseq, j) == 1 {
-                    libc::fprintf(fh, b"A\0".as_ptr() as *const c_char);
+                    fprint(fh, "A");
                 } else if is_t(rseq, j) == 1 {
-                    libc::fprintf(fh, b"T\0".as_ptr() as *const c_char);
+                    fprint(fh, "T");
                 } else if is_g(rseq, j) == 1 {
-                    libc::fprintf(fh, b"G\0".as_ptr() as *const c_char);
+                    fprint(fh, "G");
                 } else if is_c(rseq, j) == 1 && is_n(useq, slen - 1 - j) == 0 {
-                    libc::fprintf(fh, b"C\0".as_ptr() as *const c_char);
+                    fprint(fh, "C");
                 } else {
-                    libc::fprintf(fh, b"N\0".as_ptr() as *const c_char);
+                    fprint(fh, "N");
                 }
                 if (j - slen + gi.end) % 70 == 69 {
-                    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                    fprint(fh, "\n");
                 }
                 j += 1;
             }
             if (j - slen + gi.end) % 70 != 0 {
-                libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+                fprint(fh, "\n");
             }
         }
     }

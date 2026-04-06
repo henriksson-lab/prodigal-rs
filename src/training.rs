@@ -1,5 +1,8 @@
 use crate::training_data;
 use crate::types::Training;
+use std::ffi::CStr;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int};
 
 #[no_mangle]
@@ -7,21 +10,20 @@ pub unsafe extern "C" fn read_training_file(
     path: *const c_char,
     tinf: *mut Training,
 ) -> c_int {
-    let fh = libc::fopen(path, b"rb\0".as_ptr() as *const c_char);
-    if fh.is_null() {
-        return 1;
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return 1,
+    };
+    let mut file = match File::open(path_str) {
+        Ok(f) => f,
+        Err(_) => return 1,
+    };
+    let size = std::mem::size_of::<Training>();
+    let buf = std::slice::from_raw_parts_mut(tinf as *mut u8, size);
+    match file.read_exact(buf) {
+        Ok(()) => 0,
+        Err(_) => -1,
     }
-    let rv = libc::fread(
-        tinf as *mut libc::c_void,
-        std::mem::size_of::<Training>(),
-        1,
-        fh,
-    );
-    libc::fclose(fh);
-    if rv != 1 {
-        return -1;
-    }
-    0
 }
 
 #[no_mangle]
@@ -29,21 +31,20 @@ pub unsafe extern "C" fn write_training_file(
     path: *const c_char,
     tinf: *mut Training,
 ) -> c_int {
-    let fh = libc::fopen(path, b"wb\0".as_ptr() as *const c_char);
-    if fh.is_null() {
-        return -1;
+    let path_str = match CStr::from_ptr(path).to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let mut file = match File::create(path_str) {
+        Ok(f) => f,
+        Err(_) => return -1,
+    };
+    let size = std::mem::size_of::<Training>();
+    let buf = std::slice::from_raw_parts(tinf as *const u8, size);
+    match file.write_all(buf) {
+        Ok(()) => 0,
+        Err(_) => -1,
     }
-    let rv = libc::fwrite(
-        tinf as *const libc::c_void,
-        std::mem::size_of::<Training>(),
-        1,
-        fh,
-    );
-    libc::fclose(fh);
-    if rv != 1 {
-        return -1;
-    }
-    0
 }
 
 // Generate all 50 initialize_metagenome_N functions

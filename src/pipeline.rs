@@ -7,13 +7,16 @@
     Rust port of main.c — the pipeline orchestration module.
 *******************************************************************************/
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
+use std::os::unix::io::{FromRawFd, IntoRawFd};
 
 use crate::types::{Gene, Mask, MetagenomicBin, Node, Training};
 use crate::types::{MAX_GENES, MAX_LINE, MAX_MASKS, MAX_SEQ, NUM_META, STT_NOD};
 
-const VERSION: &[u8] = b"2.6.3\0";
-const DATE: &[u8] = b"February, 2016\0";
+const VERSION: &str = "2.6.3";
+const DATE: &str = "February, 2016";
+const VERSION_CSTR: &[u8] = b"2.6.3\0";
 const MIN_SINGLE_GENOME: c_int = 20000;
 const IDEAL_SINGLE_GENOME: c_int = 100000;
 
@@ -25,9 +28,9 @@ extern "C" {
     fn seq_reader_close(file: *mut c_void) -> c_int;
     fn seq_reader_seek(
         file: *mut c_void,
-        offset: libc::c_long,
+        offset: i64,
         whence: c_int,
-    ) -> libc::c_long;
+    ) -> i64;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +78,6 @@ extern "C" {
         nmask: c_int,
         tinf: *mut Training,
     ) -> c_int;
-
-    fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int;
 
     fn record_gc_bias(gc: *mut c_int, nodes: *mut Node, nn: c_int, tinf: *mut Training);
 
@@ -143,7 +144,7 @@ extern "C" {
     fn reset_node_scores(nod: *mut Node, nn: c_int);
 
     fn write_start_file(
-        fh: *mut libc::FILE,
+        fh: c_int,
         nod: *mut Node,
         nn: c_int,
         tinf: *mut Training,
@@ -180,7 +181,7 @@ extern "C" {
     );
 
     fn print_genes(
-        fp: *mut libc::FILE,
+        fp: c_int,
         genes: *mut Gene,
         ng: c_int,
         nod: *mut Node,
@@ -196,7 +197,7 @@ extern "C" {
     );
 
     fn write_translations(
-        fh: *mut libc::FILE,
+        fh: c_int,
         genes: *mut Gene,
         ng: c_int,
         nod: *mut Node,
@@ -210,7 +211,7 @@ extern "C" {
     );
 
     fn write_nucleotide_seqs(
-        fh: *mut libc::FILE,
+        fh: c_int,
         genes: *mut Gene,
         ng: c_int,
         nod: *mut Node,
@@ -233,226 +234,113 @@ extern "C" {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: sort a Node slice by (ndx, -strand) matching compare_nodes logic
+// ---------------------------------------------------------------------------
+unsafe fn sort_nodes(nodes: &mut [Node]) {
+    nodes.sort_unstable_by(|a, b| {
+        a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand))
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Helper: print version and exit
 // ---------------------------------------------------------------------------
-unsafe fn version() {
-    libc::fprintf(
-        libc::fdopen(2, b"w\0".as_ptr() as *const c_char),
-        b"\nProdigal V%s: %s\n\n\0".as_ptr() as *const c_char,
-        VERSION.as_ptr() as *const c_char,
-        DATE.as_ptr() as *const c_char,
-    );
-    libc::exit(0);
+fn version() -> ! {
+    eprintln!("\nProdigal V{}: {}\n", VERSION, DATE);
+    std::process::exit(0);
 }
 
 // ---------------------------------------------------------------------------
 // Helper: print brief usage and exit
 // ---------------------------------------------------------------------------
-unsafe fn usage(msg: *const c_char) {
-    let stderr = libc::fdopen(2, b"w\0".as_ptr() as *const c_char);
-    libc::fprintf(stderr, b"\n%s\n\0".as_ptr() as *const c_char, msg);
-    libc::fprintf(
-        stderr,
-        b"\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-f output_type]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"                 [-g tr_table] [-h] [-i input_file] [-m]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-n] [-o output_file]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"                 [-p mode] [-q] [-s start_file]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-t training_file] [-v]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"\nDo 'prodigal -h' for more information.\n\n\0".as_ptr() as *const c_char,
-    );
-    libc::exit(15);
+fn usage(msg: &str) -> ! {
+    eprintln!("\n{}", msg);
+    eprint!("\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]");
+    eprintln!(" [-f output_type]");
+    eprint!("                 [-g tr_table] [-h] [-i input_file] [-m]");
+    eprintln!(" [-n] [-o output_file]");
+    eprint!("                 [-p mode] [-q] [-s start_file]");
+    eprintln!(" [-t training_file] [-v]");
+    eprintln!("\nDo 'prodigal -h' for more information.\n");
+    std::process::exit(15);
 }
 
 // ---------------------------------------------------------------------------
 // Helper: print full help and exit
 // ---------------------------------------------------------------------------
-unsafe fn help() {
-    let stderr = libc::fdopen(2, b"w\0".as_ptr() as *const c_char);
-    libc::fprintf(
-        stderr,
-        b"\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-f output_type]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"                 [-g tr_table] [-h] [-i input_file] [-m]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-n] [-o output_file]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"                 [-p mode] [-q] [-s start_file]\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" [-t training_file] [-v]\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"\n         -a:  Write protein translations to the selected \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(stderr, b"file.\n\0".as_ptr() as *const c_char);
-    libc::fprintf(
-        stderr,
-        b"         -c:  Closed ends.  Do not allow genes to run off \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(stderr, b"edges.\n\0".as_ptr() as *const c_char);
-    libc::fprintf(
-        stderr,
-        b"         -d:  Write nucleotide sequences of genes to the \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"selected file.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -f:  Select output format (gbk, gff, or sco).  \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"Default is gbk.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -g:  Specify a translation table to use (default\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(stderr, b" 11).\n\0".as_ptr() as *const c_char);
-    libc::fprintf(
-        stderr,
-        b"         -h:  Print help menu and exit.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -i:  Specify FASTA/Genbank input file (default \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"reads from stdin).\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -m:  Treat runs of N as masked sequence; don't\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" build genes across them.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -n:  Bypass Shine-Dalgarno trainer and force\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" a full motif scan.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -o:  Specify output file (default writes to \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(stderr, b"stdout).\n\0".as_ptr() as *const c_char);
-    libc::fprintf(
-        stderr,
-        b"         -p:  Select procedure (single or meta).  Default\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" is single.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -q:  Run quietly (suppress normal stderr output).\n\0".as_ptr()
-            as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -s:  Write all potential genes (with scores) to\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b" the selected file.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -t:  Write a training file (if none exists); \0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"otherwise, read and use\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"              the specified training file.\n\0".as_ptr() as *const c_char,
-    );
-    libc::fprintf(
-        stderr,
-        b"         -v:  Print version number and exit.\n\n\0".as_ptr() as *const c_char,
-    );
-    libc::exit(0);
+fn help() -> ! {
+    eprint!("\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]");
+    eprintln!(" [-f output_type]");
+    eprint!("                 [-g tr_table] [-h] [-i input_file] [-m]");
+    eprintln!(" [-n] [-o output_file]");
+    eprint!("                 [-p mode] [-q] [-s start_file]");
+    eprintln!(" [-t training_file] [-v]");
+    eprint!("\n         -a:  Write protein translations to the selected ");
+    eprintln!("file.");
+    eprint!("         -c:  Closed ends.  Do not allow genes to run off ");
+    eprintln!("edges.");
+    eprint!("         -d:  Write nucleotide sequences of genes to the ");
+    eprintln!("selected file.");
+    eprint!("         -f:  Select output format (gbk, gff, or sco).  ");
+    eprintln!("Default is gbk.");
+    eprint!("         -g:  Specify a translation table to use (default");
+    eprintln!(" 11).");
+    eprintln!("         -h:  Print help menu and exit.");
+    eprint!("         -i:  Specify FASTA/Genbank input file (default ");
+    eprintln!("reads from stdin).");
+    eprint!("         -m:  Treat runs of N as masked sequence; don't");
+    eprintln!(" build genes across them.");
+    eprint!("         -n:  Bypass Shine-Dalgarno trainer and force");
+    eprintln!(" a full motif scan.");
+    eprint!("         -o:  Specify output file (default writes to ");
+    eprintln!("stdout).");
+    eprint!("         -p:  Select procedure (single or meta).  Default");
+    eprintln!(" is single.");
+    eprintln!("         -q:  Run quietly (suppress normal stderr output).");
+    eprint!("         -s:  Write all potential genes (with scores) to");
+    eprintln!(" the selected file.");
+    eprint!("         -t:  Write a training file (if none exists); ");
+    eprintln!("otherwise, read and use");
+    eprintln!("              the specified training file.");
+    eprintln!("         -v:  Print version number and exit.\n");
+    std::process::exit(0);
 }
 
 // ---------------------------------------------------------------------------
 // Helper: copy stdin to a temp file (for piped input that needs rewinding)
 // ---------------------------------------------------------------------------
-unsafe fn copy_standard_input_to_file(path: *const c_char, quiet: c_int) -> c_int {
-    let mut line: [c_char; MAX_LINE + 1] = [0; MAX_LINE + 1];
-    let stderr = libc::fdopen(2, b"w\0".as_ptr() as *const c_char);
+fn copy_standard_input_to_file(path: &std::ffi::CStr, quiet: c_int) -> c_int {
+    use std::io::{BufRead, Write};
 
     if quiet == 0 {
-        libc::fprintf(
-            stderr,
-            b"Piped input detected, copying stdin to a tmp file...\0".as_ptr() as *const c_char,
-        );
+        eprint!("Piped input detected, copying stdin to a tmp file...");
     }
 
-    let wp = libc::fopen(path, b"w\0".as_ptr() as *const c_char);
-    if wp.is_null() {
-        return -1;
+    let path_str = match path.to_str() {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let file = match std::fs::File::create(path_str) {
+        Ok(f) => f,
+        Err(_) => return -1,
+    };
+    let mut writer = std::io::BufWriter::new(file);
+    let stdin = std::io::stdin();
+    let reader = stdin.lock();
+    for line in reader.lines() {
+        match line {
+            Ok(l) => {
+                if writeln!(writer, "{}", l).is_err() {
+                    return -1;
+                }
+            }
+            Err(_) => break,
+        }
     }
-    while !libc::fgets(
-        line.as_mut_ptr(),
-        MAX_LINE as c_int,
-        libc::fdopen(0, b"r\0".as_ptr() as *const c_char),
-    )
-    .is_null()
-    {
-        libc::fprintf(wp, b"%s\0".as_ptr() as *const c_char, line.as_ptr());
-    }
-    libc::fclose(wp);
 
     if quiet == 0 {
-        libc::fprintf(
-            stderr,
-            b"done!\n\0".as_ptr() as *const c_char,
-        );
-        libc::fprintf(
-            stderr,
-            b"-------------------------------------\n\0".as_ptr() as *const c_char,
-        );
+        eprintln!("done!");
+        eprintln!("-------------------------------------");
     }
     0
 }
@@ -463,14 +351,12 @@ unsafe fn copy_standard_input_to_file(path: *const c_char, quiet: c_int) -> c_in
 pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let argc = args.len() as c_int;
 
-    // Convert args to C strings for compatibility
+    // Convert args to C strings for compatibility (still needed for extern "C" calls)
     let c_args: Vec<std::ffi::CString> = args
         .iter()
         .map(|s| std::ffi::CString::new(s.as_str()).unwrap())
         .collect();
     let argv: Vec<*const c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
-
-    let stderr = libc::fdopen(2, b"w\0".as_ptr() as *const c_char);
 
     // Variable declarations
     let mut rv: c_int;
@@ -478,7 +364,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let mut nn: c_int;
     let mut ng: c_int;
     let mut ipath: c_int;
-    let mut gc_frame: *mut c_int;
+    let gc_frame: *mut c_int;
     let mut do_training: c_int;
     let mut output: c_int;
     let mut max_phase: c_int;
@@ -492,12 +378,12 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let mut quiet: c_int;
     let mut piped: c_int;
     let mut max_slen: c_int;
-    let mut fnum: c_int;
     let mut max_score: f64;
     let mut gc: f64 = 0.0;
     let mut low: f64;
     let mut high: f64;
 
+    // We still need raw C pointers for the extern "C" file path args
     let mut train_file: *const c_char = std::ptr::null();
     let mut start_file: *const c_char = std::ptr::null();
     let mut trans_file: *const c_char = std::ptr::null();
@@ -505,76 +391,49 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let mut input_file: *const c_char = std::ptr::null();
     let mut output_file: *const c_char = std::ptr::null();
 
-    let mut input_copy: [c_char; MAX_LINE] = [0; MAX_LINE];
+    let input_copy_string = format!("tmp.prodigal.stdin.{}", std::process::id());
+    let input_copy_cstr = std::ffi::CString::new(input_copy_string.as_str()).unwrap();
+
     let mut cur_header: [c_char; MAX_LINE] = [0; MAX_LINE];
     let mut new_header: [c_char; MAX_LINE] = [0; MAX_LINE];
     let mut short_header: [c_char; MAX_LINE] = [0; MAX_LINE];
 
-    let mut output_ptr: *mut libc::FILE;
-    let mut start_ptr: *mut libc::FILE;
-    let mut trans_ptr: *mut libc::FILE;
-    let mut nuc_ptr: *mut libc::FILE;
+    let mut output_ptr: c_int;
+    let mut start_ptr: c_int;
+    let mut trans_ptr: c_int;
+    let mut nuc_ptr: c_int;
     let mut input_ptr: *mut c_void = std::ptr::null_mut();
 
-    let mut fbuf: libc::stat = std::mem::zeroed();
+    // Allocate memory using Vec
+    let mut seq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 4];
+    let mut rseq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 4];
+    let mut useq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 8];
+    let mut nodes_vec: Vec<Node> = vec![unsafe { std::mem::zeroed() }; STT_NOD];
+    let mut genes_vec: Vec<Gene> = vec![unsafe { std::mem::zeroed() }; MAX_GENES];
 
-    // Allocate memory
-    let seq = libc::malloc(MAX_SEQ / 4) as *mut u8;
-    let rseq = libc::malloc(MAX_SEQ / 4) as *mut u8;
-    let useq = libc::malloc(MAX_SEQ / 8) as *mut u8;
-    let mut nodes = libc::malloc(STT_NOD * std::mem::size_of::<Node>()) as *mut Node;
-    let genes = libc::malloc(MAX_GENES * std::mem::size_of::<Gene>()) as *mut Gene;
-
-    if seq.is_null() || rseq.is_null() || nodes.is_null() || genes.is_null() {
-        libc::fprintf(
-            stderr,
-            b"\nError: Malloc failed on sequence/orfs\n\n\0".as_ptr() as *const c_char,
-        );
-        return 1;
-    }
-
-    libc::memset(seq as *mut c_void, 0, MAX_SEQ / 4);
-    libc::memset(rseq as *mut c_void, 0, MAX_SEQ / 4);
-    libc::memset(useq as *mut c_void, 0, MAX_SEQ / 8);
-    libc::memset(
-        nodes as *mut c_void,
-        0,
-        STT_NOD * std::mem::size_of::<Node>(),
-    );
-    libc::memset(
-        genes as *mut c_void,
-        0,
-        MAX_GENES * std::mem::size_of::<Gene>(),
-    );
+    let seq = seq_vec.as_mut_ptr();
+    let rseq = rseq_vec.as_mut_ptr();
+    let useq = useq_vec.as_mut_ptr();
+    let mut nodes = nodes_vec.as_mut_ptr();
+    let genes = genes_vec.as_mut_ptr();
 
     let mut tinf: Training = std::mem::zeroed();
 
     let mut meta: [MetagenomicBin; NUM_META] = std::mem::zeroed();
     let mut mlist: [Mask; MAX_MASKS] = [Mask { begin: 0, end: 0 }; MAX_MASKS];
 
+    // Allocate Training structs for metagenomic bins using Box::into_raw
+    // We collect the raw pointers so we can free them at the end.
+    let mut meta_tinf_ptrs: Vec<*mut Training> = Vec::with_capacity(NUM_META);
     for i in 0..NUM_META {
-        libc::memset(
-            &mut meta[i] as *mut MetagenomicBin as *mut c_void,
-            0,
-            std::mem::size_of::<MetagenomicBin>(),
+        std::ptr::copy_nonoverlapping(
+            b"None\0".as_ptr(),
+            meta[i].desc.as_mut_ptr() as *mut u8,
+            5,
         );
-        libc::strcpy(
-            meta[i].desc.as_mut_ptr(),
-            b"None\0".as_ptr() as *const c_char,
-        );
-        meta[i].tinf = libc::malloc(std::mem::size_of::<Training>()) as *mut Training;
-        if meta[i].tinf.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: Malloc failed on training structure.\n\n\0".as_ptr() as *const c_char,
-            );
-            return 1;
-        }
-        libc::memset(
-            meta[i].tinf as *mut c_void,
-            0,
-            std::mem::size_of::<Training>(),
-        );
+        let ptr = Box::into_raw(Box::new(std::mem::zeroed::<Training>()));
+        meta[i].tinf = ptr;
+        meta_tinf_ptrs.push(ptr);
     }
 
     // Initialize variables
@@ -597,167 +456,135 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     do_mask = 0;
     force_nonsd = 0;
 
-    let stdout = libc::fdopen(1, b"w\0".as_ptr() as *const c_char);
-    start_ptr = stdout;
-    trans_ptr = stdout;
-    nuc_ptr = stdout;
-    output_ptr = stdout;
-
-    // Filename for input copy if needed
-    let pid = libc::getpid();
-    libc::sprintf(
-        input_copy.as_mut_ptr(),
-        b"tmp.prodigal.stdin.%d\0".as_ptr() as *const c_char,
-        pid,
-    );
+    // Set up file descriptors (stdout = fd 1)
+    let stdout_fd: c_int = 1;
+    start_ptr = stdout_fd;
+    trans_ptr = stdout_fd;
+    nuc_ptr = stdout_fd;
+    output_ptr = stdout_fd;
 
     // Set default training parameters
     tinf.st_wt = 4.35;
     tinf.trans_table = 11;
 
-    // Parse command line arguments
-    let mut i: c_int = 1;
-    while i < argc {
-        let arg = argv[i as usize];
+    // Parse command line arguments using Rust string matching
+    let mut i: usize = 1;
+    while i < argc as usize {
+        let arg = args[i].as_str();
 
         // Check if this is a flag that requires a parameter but is the last arg
-        if i == argc - 1
-            && (libc::strcmp(arg, b"-t\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-T\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-a\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-A\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-g\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-G\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-f\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-F\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-s\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-S\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-i\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-I\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-o\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-O\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-p\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(arg, b"-P\0".as_ptr() as *const c_char) == 0)
-        {
-            usage(
-                b"-a/-f/-g/-i/-o/-p/-s options require parameters.\0".as_ptr() as *const c_char,
-            );
-        } else if libc::strcmp(arg, b"-c\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-C\0".as_ptr() as *const c_char) == 0
-        {
-            closed = 1;
-        } else if libc::strcmp(arg, b"-q\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-Q\0".as_ptr() as *const c_char) == 0
-        {
-            quiet = 1;
-        } else if libc::strcmp(arg, b"-m\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-M\0".as_ptr() as *const c_char) == 0
-        {
-            do_mask = 1;
-        } else if libc::strcmp(arg, b"-n\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-N\0".as_ptr() as *const c_char) == 0
-        {
-            force_nonsd = 1;
-        } else if libc::strcmp(arg, b"-h\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-H\0".as_ptr() as *const c_char) == 0
-        {
-            help();
-        } else if libc::strcmp(arg, b"-v\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-V\0".as_ptr() as *const c_char) == 0
-        {
-            version();
-        } else if libc::strcmp(arg, b"-a\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-A\0".as_ptr() as *const c_char) == 0
-        {
-            trans_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-d\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-D\0".as_ptr() as *const c_char) == 0
-        {
-            nuc_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-i\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-I\0".as_ptr() as *const c_char) == 0
-        {
-            input_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-o\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-O\0".as_ptr() as *const c_char) == 0
-        {
-            output_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-s\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-S\0".as_ptr() as *const c_char) == 0
-        {
-            start_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-t\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-T\0".as_ptr() as *const c_char) == 0
-        {
-            train_file = argv[(i + 1) as usize];
-            i += 1;
-        } else if libc::strcmp(arg, b"-g\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-G\0".as_ptr() as *const c_char) == 0
-        {
-            tinf.trans_table = libc::atoi(argv[(i + 1) as usize]);
-            if tinf.trans_table < 1
-                || tinf.trans_table > 25
-                || tinf.trans_table == 7
-                || tinf.trans_table == 8
-                || (tinf.trans_table >= 17 && tinf.trans_table <= 20)
-            {
-                usage(
-                    b"Invalid translation table specified.\0".as_ptr() as *const c_char,
-                );
+        if i == (argc - 1) as usize {
+            match arg.to_lowercase().as_str() {
+                "-t" | "-a" | "-g" | "-f" | "-s" | "-i" | "-o" | "-p" | "-d" => {
+                    usage("-a/-f/-g/-i/-o/-p/-s options require parameters.");
+                }
+                _ => {}
             }
-            user_tt = tinf.trans_table;
-            i += 1;
-        } else if libc::strcmp(arg, b"-p\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-P\0".as_ptr() as *const c_char) == 0
-        {
-            let p = *argv[(i + 1) as usize] as u8;
-            if p == b'0' || p == b's' || p == b'S' {
-                is_meta = 0;
-            } else if p == b'1' || p == b'm' || p == b'M' {
-                is_meta = 1;
-            } else {
-                usage(
-                    b"Invalid meta/single genome type specified.\0".as_ptr() as *const c_char,
-                );
+        }
+
+        match arg.to_lowercase().as_str() {
+            "-c" => {
+                closed = 1;
             }
-            i += 1;
-        } else if libc::strcmp(arg, b"-f\0".as_ptr() as *const c_char) == 0
-            || libc::strcmp(arg, b"-F\0".as_ptr() as *const c_char) == 0
-        {
-            let farg = argv[(i + 1) as usize];
-            if libc::strncmp(farg, b"0\0".as_ptr() as *const c_char, 1) == 0
-                || libc::strcmp(farg, b"gbk\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(farg, b"GBK\0".as_ptr() as *const c_char) == 0
-            {
-                output = 0;
-            } else if libc::strncmp(farg, b"1\0".as_ptr() as *const c_char, 1) == 0
-                || libc::strcmp(farg, b"gca\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(farg, b"GCA\0".as_ptr() as *const c_char) == 0
-            {
-                output = 1;
-            } else if libc::strncmp(farg, b"2\0".as_ptr() as *const c_char, 1) == 0
-                || libc::strcmp(farg, b"sco\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(farg, b"SCO\0".as_ptr() as *const c_char) == 0
-            {
-                output = 2;
-            } else if libc::strncmp(farg, b"3\0".as_ptr() as *const c_char, 1) == 0
-                || libc::strcmp(farg, b"gff\0".as_ptr() as *const c_char) == 0
-                || libc::strcmp(farg, b"GFF\0".as_ptr() as *const c_char) == 0
-            {
-                output = 3;
-            } else {
-                usage(
-                    b"Invalid output format specified.\0".as_ptr() as *const c_char,
-                );
+            "-q" => {
+                quiet = 1;
             }
-            i += 1;
-        } else {
-            usage(b"Unknown option.\0".as_ptr() as *const c_char);
+            "-m" => {
+                do_mask = 1;
+            }
+            "-n" => {
+                force_nonsd = 1;
+            }
+            "-h" => {
+                help();
+            }
+            "-v" => {
+                version();
+            }
+            "-a" => {
+                trans_file = argv[i + 1];
+                i += 1;
+            }
+            "-d" => {
+                nuc_file = argv[i + 1];
+                i += 1;
+            }
+            "-i" => {
+                input_file = argv[i + 1];
+                i += 1;
+            }
+            "-o" => {
+                output_file = argv[i + 1];
+                i += 1;
+            }
+            "-s" => {
+                start_file = argv[i + 1];
+                i += 1;
+            }
+            "-t" => {
+                train_file = argv[i + 1];
+                i += 1;
+            }
+            "-g" => {
+                let val_str = args[i + 1].as_str();
+                match val_str.parse::<c_int>() {
+                    Ok(tt) => {
+                        if tt < 1
+                            || tt > 25
+                            || tt == 7
+                            || tt == 8
+                            || (tt >= 17 && tt <= 20)
+                        {
+                            usage("Invalid translation table specified.");
+                        }
+                        tinf.trans_table = tt;
+                        user_tt = tt;
+                    }
+                    Err(_) => {
+                        usage("Invalid translation table specified.");
+                    }
+                }
+                i += 1;
+            }
+            "-p" => {
+                let val = args[i + 1].as_str();
+                let first = val.as_bytes().first().copied().unwrap_or(0);
+                if first == b'0' || first == b's' || first == b'S' {
+                    is_meta = 0;
+                } else if first == b'1' || first == b'm' || first == b'M' {
+                    is_meta = 1;
+                } else {
+                    usage("Invalid meta/single genome type specified.");
+                }
+                i += 1;
+            }
+            "-f" => {
+                let farg = args[i + 1].as_str();
+                match farg.to_lowercase().as_str() {
+                    "0" | "gbk" => output = 0,
+                    "1" | "gca" => output = 1,
+                    "2" | "sco" => output = 2,
+                    "3" | "gff" => output = 3,
+                    _ => {
+                        // Also check if starts with 0/1/2/3
+                        if farg.starts_with('0') {
+                            output = 0;
+                        } else if farg.starts_with('1') {
+                            output = 1;
+                        } else if farg.starts_with('2') {
+                            output = 2;
+                        } else if farg.starts_with('3') {
+                            output = 3;
+                        } else {
+                            usage("Invalid output format specified.");
+                        }
+                    }
+                }
+                i += 1;
+            }
+            _ => {
+                usage("Unknown option.");
+            }
         }
 
         i += 1;
@@ -765,42 +592,18 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
 
     // Print header
     if quiet == 0 {
-        libc::fprintf(
-            stderr,
-            b"-------------------------------------\n\0".as_ptr() as *const c_char,
-        );
-        libc::fprintf(
-            stderr,
-            b"PRODIGAL v%s [%s]         \n\0".as_ptr() as *const c_char,
-            VERSION.as_ptr() as *const c_char,
-            DATE.as_ptr() as *const c_char,
-        );
-        libc::fprintf(
-            stderr,
-            b"Univ of Tenn / Oak Ridge National Lab\n\0".as_ptr() as *const c_char,
-        );
-        libc::fprintf(
-            stderr,
-            b"Doug Hyatt, Loren Hauser, et al.     \n\0".as_ptr() as *const c_char,
-        );
-        libc::fprintf(
-            stderr,
-            b"-------------------------------------\n\0".as_ptr() as *const c_char,
-        );
+        eprintln!("-------------------------------------");
+        eprintln!("PRODIGAL v{} [{}]         ", VERSION, DATE);
+        eprintln!("Univ of Tenn / Oak Ridge National Lab");
+        eprintln!("Doug Hyatt, Loren Hauser, et al.     ");
+        eprintln!("-------------------------------------");
     }
 
     // Read in the training file (if specified)
     if !train_file.is_null() {
         if is_meta == 1 {
-            libc::fprintf(
-                stderr,
-                b"\nError: cannot specify metagenomic sequence with a\0".as_ptr()
-                    as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b" training file.\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\nError: cannot specify metagenomic sequence with a");
+            eprintln!(" training file.");
             return 2;
         }
         rv = read_training_file(train_file, &mut tinf);
@@ -808,81 +611,53 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             do_training = 1;
         } else {
             if force_nonsd == 1 {
-                libc::fprintf(
-                    stderr,
-                    b"\nError: cannot force non-SD finder with a training\0".as_ptr()
-                        as *const c_char,
-                );
-                libc::fprintf(
-                    stderr,
-                    b" file already created!\n\0".as_ptr() as *const c_char,
-                );
+                eprint!("\nError: cannot force non-SD finder with a training");
+                eprintln!(" file already created!");
                 return 3;
             }
             if quiet == 0 {
-                libc::fprintf(
-                    stderr,
-                    b"Reading in training data from file %s...\0".as_ptr() as *const c_char,
-                    train_file,
-                );
+                let tf_str = CStr::from_ptr(train_file).to_string_lossy();
+                eprint!("Reading in training data from file {}...", tf_str);
             }
             if user_tt > 0 && user_tt != tinf.trans_table {
-                libc::fprintf(
-                    stderr,
-                    b"\n\nWarning: user-specified translation table does\0".as_ptr()
-                        as *const c_char,
-                );
-                libc::fprintf(
-                    stderr,
-                    b"not match the one in the specified training file! \n\n\0".as_ptr()
-                        as *const c_char,
-                );
+                eprint!("\n\nWarning: user-specified translation table does");
+                eprintln!("not match the one in the specified training file! \n");
             }
             if rv == -1 {
-                libc::fprintf(
-                    stderr,
-                    b"\n\nError: training file did not read correctly!\n\0".as_ptr()
-                        as *const c_char,
-                );
+                eprintln!("\n\nError: training file did not read correctly!");
                 return 4;
             }
             if quiet == 0 {
-                libc::fprintf(
-                    stderr,
-                    b"done!\n\0".as_ptr() as *const c_char,
-                );
-                libc::fprintf(
-                    stderr,
-                    b"-------------------------------------\n\0".as_ptr() as *const c_char,
-                );
+                eprintln!("done!");
+                eprintln!("-------------------------------------");
             }
         }
     }
 
     // Determine where standard input is coming from
     if is_meta == 0 && train_file.is_null() && input_file.is_null() {
-        fnum = libc::fileno(libc::fdopen(0, b"r\0".as_ptr() as *const c_char));
-        if libc::fstat(fnum, &mut fbuf) == -1 {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't fstat standard input.\n\n\0".as_ptr() as *const c_char,
-            );
-            return 5;
-        }
-        if (fbuf.st_mode & libc::S_IFMT) == libc::S_IFCHR {
-            help();
-        } else if (fbuf.st_mode & libc::S_IFMT) == libc::S_IFREG {
-            // do nothing
-        } else if (fbuf.st_mode & libc::S_IFMT) == libc::S_IFIFO {
-            piped = 1;
-            if copy_standard_input_to_file(input_copy.as_ptr(), quiet) == -1 {
-                libc::fprintf(
-                    stderr,
-                    b"\nError: can't copy stdin to file.\n\n\0".as_ptr() as *const c_char,
-                );
+        // Use std::fs::metadata on /dev/stdin to check file type
+        use std::os::unix::fs::FileTypeExt;
+        match std::fs::metadata("/dev/stdin") {
+            Err(_) => {
+                eprintln!("\nError: can't fstat standard input.\n");
                 return 5;
             }
-            input_file = input_copy.as_ptr();
+            Ok(md) => {
+                let ft = md.file_type();
+                if ft.is_char_device() {
+                    help();
+                } else if ft.is_file() {
+                    // do nothing
+                } else if ft.is_fifo() {
+                    piped = 1;
+                    if copy_standard_input_to_file(&input_copy_cstr, quiet) == -1 {
+                        eprintln!("\nError: can't copy stdin to file.\n");
+                        return 5;
+                    }
+                    input_file = input_copy_cstr.as_ptr();
+                }
+            }
         }
     }
 
@@ -890,11 +665,8 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     if !input_file.is_null() {
         input_ptr = seq_reader_open(input_file);
         if input_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open input file %s.\n\n\0".as_ptr() as *const c_char,
-                input_file,
-            );
+            let f = CStr::from_ptr(input_file).to_string_lossy();
+            eprintln!("\nError: can't open input file {}.\n", f);
             return 5;
         }
     }
@@ -903,56 +675,36 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             b"/dev/stdin\0".as_ptr() as *const c_char,
         );
         if input_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open input file %s.\n\n\0".as_ptr() as *const c_char,
-                input_file,
-            );
+            eprintln!("\nError: can't open stdin.\n");
             return 5;
         }
     }
     if !output_file.is_null() {
-        output_ptr = libc::fopen(output_file, b"w\0".as_ptr() as *const c_char);
-        if output_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open output file %s.\n\n\0".as_ptr() as *const c_char,
-                output_file,
-            );
-            return 6;
+        let path = CStr::from_ptr(output_file).to_string_lossy();
+        match std::fs::File::create(path.as_ref()) {
+            Ok(f) => { output_ptr = f.into_raw_fd(); }
+            Err(_) => { eprintln!("\nError: can't open output file {}.\n", path); return 6; }
         }
     }
     if !start_file.is_null() {
-        start_ptr = libc::fopen(start_file, b"w\0".as_ptr() as *const c_char);
-        if start_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open start file %s.\n\n\0".as_ptr() as *const c_char,
-                start_file,
-            );
-            return 7;
+        let path = CStr::from_ptr(start_file).to_string_lossy();
+        match std::fs::File::create(path.as_ref()) {
+            Ok(f) => { start_ptr = f.into_raw_fd(); }
+            Err(_) => { eprintln!("\nError: can't open start file {}.\n", path); return 7; }
         }
     }
     if !trans_file.is_null() {
-        trans_ptr = libc::fopen(trans_file, b"w\0".as_ptr() as *const c_char);
-        if trans_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open translation file %s.\n\n\0".as_ptr() as *const c_char,
-                trans_file,
-            );
-            return 8;
+        let path = CStr::from_ptr(trans_file).to_string_lossy();
+        match std::fs::File::create(path.as_ref()) {
+            Ok(f) => { trans_ptr = f.into_raw_fd(); }
+            Err(_) => { eprintln!("\nError: can't open translation file {}.\n", path); return 8; }
         }
     }
     if !nuc_file.is_null() {
-        nuc_ptr = libc::fopen(nuc_file, b"w\0".as_ptr() as *const c_char);
-        if nuc_ptr.is_null() {
-            libc::fprintf(
-                stderr,
-                b"\nError: can't open gene nucleotide file %s.\n\n\0".as_ptr() as *const c_char,
-                nuc_file,
-            );
-            return 16;
+        let path = CStr::from_ptr(nuc_file).to_string_lossy();
+        match std::fs::File::create(path.as_ref()) {
+            Ok(f) => { nuc_ptr = f.into_raw_fd(); }
+            Err(_) => { eprintln!("\nError: can't open gene nucleotide file {}.\n", path); return 16; }
         }
     }
 
@@ -961,14 +713,8 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     // =========================================================================
     if is_meta == 0 && (do_training == 1 || (do_training == 0 && train_file.is_null())) {
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Request:  Single Genome, Phase:  Training\n\0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"Reading in the sequence(s) to train...\0".as_ptr() as *const c_char,
-            );
+            eprintln!("Request:  Single Genome, Phase:  Training");
+            eprint!("Reading in the sequence(s) to train...");
         }
         slen = read_seq_training(
             input_ptr,
@@ -980,85 +726,36 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             &mut nmask,
         );
         if slen == 0 {
-            libc::fprintf(
-                stderr,
-                b"\n\nSequence read failed (file must be Fasta, \0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"Genbank, or EMBL format).\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\n\nSequence read failed (file must be Fasta, ");
+            eprintln!("Genbank, or EMBL format).\n");
             return 9;
         }
         if slen < MIN_SINGLE_GENOME {
-            libc::fprintf(
-                stderr,
-                b"\n\nError:  Sequence must be %d\0".as_ptr() as *const c_char,
-                MIN_SINGLE_GENOME,
-            );
-            libc::fprintf(
-                stderr,
-                b" characters (only %d read).\n(Consider\0".as_ptr() as *const c_char,
-                slen,
-            );
-            libc::fprintf(
-                stderr,
-                b" running with the -p meta option or finding\0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b" more contigs from the same genome.)\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\n\nError:  Sequence must be {}", MIN_SINGLE_GENOME);
+            eprint!(" characters (only {} read).\n(Consider", slen);
+            eprint!(" running with the -p meta option or finding");
+            eprintln!(" more contigs from the same genome.)\n");
             return 10;
         }
         if slen < IDEAL_SINGLE_GENOME {
-            libc::fprintf(
-                stderr,
-                b"\n\nWarning:  ideally Prodigal should be given at\0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b" least %d bases for \0".as_ptr() as *const c_char,
-                IDEAL_SINGLE_GENOME,
-            );
-            libc::fprintf(
-                stderr,
-                b"training.\nYou may get better results with the \0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"-p meta option.\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\n\nWarning:  ideally Prodigal should be given at");
+            eprint!(" least {} bases for ", IDEAL_SINGLE_GENOME);
+            eprint!("training.\nYou may get better results with the ");
+            eprintln!("-p meta option.\n");
         }
         rcom_seq(seq, rseq, useq, slen);
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"%d bp seq created, %.2f pct GC\n\0".as_ptr() as *const c_char,
-                slen,
-                tinf.gc * 100.0,
-            );
+            eprintln!("{} bp seq created, {:.2} pct GC", slen, tinf.gc * 100.0);
         }
 
         // Find all potential starts and stops
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Locating all potential starts and stops...\0".as_ptr() as *const c_char,
-            );
+            eprint!("Locating all potential starts and stops...");
         }
         if slen > max_slen && slen > (STT_NOD as c_int) * 8 {
-            nodes = libc::realloc(
-                nodes as *mut c_void,
-                (slen as usize / 8) * std::mem::size_of::<Node>(),
-            ) as *mut Node;
-            if nodes.is_null() {
-                libc::fprintf(
-                    stderr,
-                    b"Realloc failed on nodes\n\n\0".as_ptr() as *const c_char,
-                );
-                return 11;
-            }
+            let new_size = slen as usize / 8;
+            nodes_vec.resize(new_size, std::mem::zeroed());
+            nodes = nodes_vec.as_mut_ptr();
             max_slen = slen;
         }
         nn = add_nodes(
@@ -1071,85 +768,52 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             nmask,
             &mut tinf,
         );
-        libc::qsort(
-            nodes as *mut c_void,
-            nn as libc::size_t,
-            std::mem::size_of::<Node>(),
-            Some(compare_nodes),
-        );
+        sort_nodes(&mut nodes_vec[..nn as usize]);
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"%d nodes\n\0".as_ptr() as *const c_char,
-                nn,
-            );
+            eprintln!("{} nodes", nn);
         }
 
         // Scan ORFs for GC bias
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Looking for GC bias in different frames...\0".as_ptr() as *const c_char,
-            );
+            eprint!("Looking for GC bias in different frames...");
         }
         gc_frame = calc_most_gc_frame(seq, slen);
         if gc_frame.is_null() {
-            libc::fprintf(
-                stderr,
-                b"Malloc failed on gc frame plot\n\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("Malloc failed on gc frame plot\n");
             return 11;
         }
         record_gc_bias(gc_frame, nodes, nn, &mut tinf);
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"frame bias scores: %.2f %.2f %.2f\n\0".as_ptr() as *const c_char,
-                tinf.bias[0],
-                tinf.bias[1],
-                tinf.bias[2],
+            eprintln!(
+                "frame bias scores: {:.2} {:.2} {:.2}",
+                tinf.bias[0], tinf.bias[1], tinf.bias[2]
             );
         }
-        libc::free(gc_frame as *mut c_void);
+        drop(Vec::from_raw_parts(gc_frame, slen as usize, slen as usize));
 
         // Initial DP with GC frame bias
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Building initial set of genes to train from...\0".as_ptr() as *const c_char,
-            );
+            eprint!("Building initial set of genes to train from...");
         }
         record_overlapping_starts(nodes, nn, &mut tinf, 0);
         ipath = dprog(nodes, nn, &mut tinf, 0);
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"done!\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("done!");
         }
 
         // Gather dicodon statistics
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Creating coding model and scoring nodes...\0".as_ptr() as *const c_char,
-            );
+            eprint!("Creating coding model and scoring nodes...");
         }
         calc_dicodon_gene(&mut tinf, seq, rseq, slen, nodes, ipath);
         raw_coding_score(seq, rseq, slen, nodes, nn, &mut tinf);
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"done!\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("done!");
         }
 
         // Determine SD usage and train starts
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Examining upstream regions and training starts...\0".as_ptr() as *const c_char,
-            );
+            eprint!("Examining upstream regions and training starts...");
         }
         rbs_score(seq, rseq, slen, nodes, nn, &mut tinf);
         train_starts_sd(seq, rseq, slen, nodes, nn, &mut tinf);
@@ -1161,53 +825,37 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             train_starts_nonsd(seq, rseq, slen, nodes, nn, &mut tinf);
         }
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"done!\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("done!");
         }
 
         // If training specified, write the training file and exit
         if do_training == 1 {
             if quiet == 0 {
-                libc::fprintf(
-                    stderr,
-                    b"Writing data to training file %s...\0".as_ptr() as *const c_char,
-                    train_file,
-                );
+                let tf_str = CStr::from_ptr(train_file).to_string_lossy();
+                eprint!("Writing data to training file {}...", tf_str);
             }
             rv = write_training_file(train_file, &mut tinf);
             if rv != 0 {
-                libc::fprintf(
-                    stderr,
-                    b"\nError: could not write training file!\n\0".as_ptr() as *const c_char,
-                );
+                eprintln!("\nError: could not write training file!");
                 return 12;
             } else {
                 if quiet == 0 {
-                    libc::fprintf(
-                        stderr,
-                        b"done!\n\0".as_ptr() as *const c_char,
-                    );
+                    eprintln!("done!");
                 }
                 // Clean up and return
-                libc::free(seq as *mut c_void);
-                libc::free(rseq as *mut c_void);
-                libc::free(useq as *mut c_void);
-                libc::free(nodes as *mut c_void);
-                libc::free(genes as *mut c_void);
-                for j in 0..NUM_META {
-                    libc::free(meta[j].tinf as *mut c_void);
+                // Vec memory freed automatically when dropped
+                for ptr in &meta_tinf_ptrs {
+                    drop(Box::from_raw(*ptr));
                 }
                 seq_reader_close(input_ptr);
-                if output_ptr != stdout {
-                    libc::fclose(output_ptr);
+                if output_ptr != stdout_fd {
+                    drop(std::fs::File::from_raw_fd(output_ptr));
                 }
-                if start_ptr != stdout {
-                    libc::fclose(start_ptr);
+                if start_ptr != stdout_fd {
+                    drop(std::fs::File::from_raw_fd(start_ptr));
                 }
-                if trans_ptr != stdout {
-                    libc::fclose(trans_ptr);
+                if trans_ptr != stdout_fd {
+                    drop(std::fs::File::from_raw_fd(trans_ptr));
                 }
                 return 0;
             }
@@ -1215,28 +863,18 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
 
         // Rewind input file
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"-------------------------------------\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("-------------------------------------");
         }
-        if seq_reader_seek(input_ptr, 0, libc::SEEK_SET) == -1 {
-            libc::fprintf(
-                stderr,
-                b"\nError: could not rewind input file.\n\0".as_ptr() as *const c_char,
-            );
+        if seq_reader_seek(input_ptr, 0, 0) == -1 {  // SEEK_SET = 0
+            eprintln!("\nError: could not rewind input file.");
             return 13;
         }
 
         // Reset sequence/DP variables
-        libc::memset(seq as *mut c_void, 0, slen as usize / 4 + 1);
-        libc::memset(rseq as *mut c_void, 0, slen as usize / 4 + 1);
-        libc::memset(useq as *mut c_void, 0, slen as usize / 8 + 1);
-        libc::memset(
-            nodes as *mut c_void,
-            0,
-            nn as usize * std::mem::size_of::<Node>(),
-        );
+        std::ptr::write_bytes(seq, 0, (slen as usize / 4 + 1).min(seq_vec.len()));
+        std::ptr::write_bytes(rseq, 0, (slen as usize / 4 + 1).min(rseq_vec.len()));
+        std::ptr::write_bytes(useq, 0, (slen as usize / 8 + 1).min(useq_vec.len()));
+        std::ptr::write_bytes(nodes, 0, nn as usize);
         nn = 0;
         slen = 0;
         ipath = 0;
@@ -1245,52 +883,36 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     // Initialize metagenomic bins
     else if is_meta == 1 {
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Request:  Metagenomic, Phase:  Training\n\0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"Initializing training files...\0".as_ptr() as *const c_char,
-            );
+            eprintln!("Request:  Metagenomic, Phase:  Training");
+            eprint!("Initializing training files...");
         }
         initialize_metagenomic_bins(meta.as_mut_ptr());
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"done!\n\0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"-------------------------------------\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("done!");
+            eprintln!("-------------------------------------");
         }
     }
 
     // Print header for gene finding phase
     if quiet == 0 {
         if is_meta == 1 {
-            libc::fprintf(
-                stderr,
-                b"Request:  Metagenomic, Phase:  Gene Finding\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("Request:  Metagenomic, Phase:  Gene Finding");
         } else {
-            libc::fprintf(
-                stderr,
-                b"Request:  Single Genome, Phase:  Gene Finding\n\0".as_ptr() as *const c_char,
-            );
+            eprintln!("Request:  Single Genome, Phase:  Gene Finding");
         }
     }
 
     // Read and process each sequence
-    libc::sprintf(
-        cur_header.as_mut_ptr(),
-        b"Prodigal_Seq_1\0".as_ptr() as *const c_char,
-    );
-    libc::sprintf(
-        new_header.as_mut_ptr(),
-        b"Prodigal_Seq_2\0".as_ptr() as *const c_char,
-    );
+    {
+        let s = std::ffi::CString::new("Prodigal_Seq_1").unwrap();
+        let bytes = s.as_bytes_with_nul();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, cur_header.as_mut_ptr(), bytes.len());
+    }
+    {
+        let s = std::ffi::CString::new("Prodigal_Seq_2").unwrap();
+        let bytes = s.as_bytes_with_nul();
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, new_header.as_mut_ptr(), bytes.len());
+    }
 
     loop {
         slen = next_seq_multi(
@@ -1311,39 +933,20 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
 
         rcom_seq(seq, rseq, useq, slen);
         if slen == 0 {
-            libc::fprintf(
-                stderr,
-                b"\nSequence read failed (file must be Fasta, \0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                stderr,
-                b"Genbank, or EMBL format).\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\nSequence read failed (file must be Fasta, ");
+            eprintln!("Genbank, or EMBL format).\n");
             return 14;
         }
 
         if quiet == 0 {
-            libc::fprintf(
-                stderr,
-                b"Finding genes in sequence #%d (%d bp)...\0".as_ptr() as *const c_char,
-                num_seq,
-                slen,
-            );
+            eprint!("Finding genes in sequence #{} ({} bp)...", num_seq, slen);
         }
 
         // Reallocate if this is the biggest sequence we've seen
         if slen > max_slen && slen > (STT_NOD as c_int) * 8 {
-            nodes = libc::realloc(
-                nodes as *mut c_void,
-                (slen as usize / 8) * std::mem::size_of::<Node>(),
-            ) as *mut Node;
-            if nodes.is_null() {
-                libc::fprintf(
-                    stderr,
-                    b"Realloc failed on nodes\n\n\0".as_ptr() as *const c_char,
-                );
-                return 11;
-            }
+            let new_size = slen as usize / 8;
+            nodes_vec.resize(new_size, std::mem::zeroed());
+            nodes = nodes_vec.as_mut_ptr();
             max_slen = slen;
         }
 
@@ -1362,15 +965,10 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 nmask,
                 &mut tinf,
             );
-            libc::qsort(
-                nodes as *mut c_void,
-                nn as libc::size_t,
-                std::mem::size_of::<Node>(),
-                Some(compare_nodes),
-            );
+            sort_nodes(&mut nodes_vec[..nn as usize]);
 
             score_nodes(seq, rseq, slen, nodes, nn, &mut tinf, closed, is_meta);
-            if start_ptr != stdout {
+            if start_ptr != stdout_fd {
                 write_start_file(
                     start_ptr,
                     nodes,
@@ -1380,7 +978,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                     slen,
                     0,
                     std::ptr::null_mut(),
-                    VERSION.as_ptr() as *mut c_char,
+                    VERSION_CSTR.as_ptr() as *mut c_char,
                     cur_header.as_mut_ptr(),
                 );
             }
@@ -1391,10 +989,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             tweak_final_starts(genes, ng, nodes, nn, &mut tinf);
             record_gene_data(genes, ng, nodes, &mut tinf, num_seq);
             if quiet == 0 {
-                libc::fprintf(
-                    stderr,
-                    b"done!\n\0".as_ptr() as *const c_char,
-                );
+                eprintln!("done!");
             }
 
             // Output the genes
@@ -1411,10 +1006,10 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 &mut tinf,
                 cur_header.as_mut_ptr(),
                 short_header.as_mut_ptr(),
-                VERSION.as_ptr() as *mut c_char,
+                VERSION_CSTR.as_ptr() as *mut c_char,
             );
-            libc::fflush(output_ptr);
-            if trans_ptr != stdout {
+            // fd writes go directly to kernel, no fflush needed
+            if trans_ptr != stdout_fd {
                 write_translations(
                     trans_ptr,
                     genes,
@@ -1429,7 +1024,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                     short_header.as_mut_ptr(),
                 );
             }
-            if nuc_ptr != stdout {
+            if nuc_ptr != stdout_fd {
                 write_nucleotide_seqs(
                     nuc_ptr,
                     genes,
@@ -1461,11 +1056,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                     || (*meta[mi as usize].tinf).trans_table
                         != (*meta[(mi - 1) as usize].tinf).trans_table
                 {
-                    libc::memset(
-                        nodes as *mut c_void,
-                        0,
-                        nn as usize * std::mem::size_of::<Node>(),
-                    );
+                    std::ptr::write_bytes(nodes, 0, nn as usize);
                     nn = add_nodes(
                         seq,
                         rseq,
@@ -1476,12 +1067,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                         nmask,
                         meta[mi as usize].tinf,
                     );
-                    libc::qsort(
-                        nodes as *mut c_void,
-                        nn as libc::size_t,
-                        std::mem::size_of::<Node>(),
-                        Some(compare_nodes),
-                    );
+                    sort_nodes(&mut nodes_vec[..nn as usize]);
                 }
                 if (*meta[mi as usize].tinf).gc < low
                     || (*meta[mi as usize].tinf).gc > high
@@ -1512,11 +1098,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
             }
 
             // Recover the nodes for the best run
-            libc::memset(
-                nodes as *mut c_void,
-                0,
-                nn as usize * std::mem::size_of::<Node>(),
-            );
+            std::ptr::write_bytes(nodes, 0, nn as usize);
             nn = add_nodes(
                 seq,
                 rseq,
@@ -1527,12 +1109,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 nmask,
                 meta[max_phase as usize].tinf,
             );
-            libc::qsort(
-                nodes as *mut c_void,
-                nn as libc::size_t,
-                std::mem::size_of::<Node>(),
-                Some(compare_nodes),
-            );
+            sort_nodes(&mut nodes_vec[..nn as usize]);
             score_nodes(
                 seq,
                 rseq,
@@ -1543,7 +1120,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 closed,
                 is_meta,
             );
-            if start_ptr != stdout {
+            if start_ptr != stdout_fd {
                 write_start_file(
                     start_ptr,
                     nodes,
@@ -1553,16 +1130,13 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                     slen,
                     1,
                     meta[max_phase as usize].desc.as_mut_ptr(),
-                    VERSION.as_ptr() as *mut c_char,
+                    VERSION_CSTR.as_ptr() as *mut c_char,
                     cur_header.as_mut_ptr(),
                 );
             }
 
             if quiet == 0 {
-                libc::fprintf(
-                    stderr,
-                    b"done!\n\0".as_ptr() as *const c_char,
-                );
+                eprintln!("done!");
             }
 
             // Output the genes
@@ -1579,10 +1153,10 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 meta[max_phase as usize].tinf,
                 cur_header.as_mut_ptr(),
                 short_header.as_mut_ptr(),
-                VERSION.as_ptr() as *mut c_char,
+                VERSION_CSTR.as_ptr() as *mut c_char,
             );
-            libc::fflush(output_ptr);
-            if trans_ptr != stdout {
+            // fd writes go directly to kernel, no fflush needed
+            if trans_ptr != stdout_fd {
                 write_translations(
                     trans_ptr,
                     genes,
@@ -1597,7 +1171,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                     short_header.as_mut_ptr(),
                 );
             }
-            if nuc_ptr != stdout {
+            if nuc_ptr != stdout_fd {
                 write_nucleotide_seqs(
                     nuc_ptr,
                     genes,
@@ -1615,67 +1189,61 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
         }
 
         // Reset sequence/DP variables
-        libc::memset(seq as *mut c_void, 0, slen as usize / 4 + 1);
-        libc::memset(rseq as *mut c_void, 0, slen as usize / 4 + 1);
-        libc::memset(useq as *mut c_void, 0, slen as usize / 8 + 1);
-        libc::memset(
-            nodes as *mut c_void,
-            0,
-            nn as usize * std::mem::size_of::<Node>(),
-        );
+        std::ptr::write_bytes(seq, 0, (slen as usize / 4 + 1).min(seq_vec.len()));
+        std::ptr::write_bytes(rseq, 0, (slen as usize / 4 + 1).min(rseq_vec.len()));
+        std::ptr::write_bytes(useq, 0, (slen as usize / 8 + 1).min(useq_vec.len()));
+        std::ptr::write_bytes(nodes, 0, nn as usize);
         nn = 0;
         slen = 0;
         ipath = 0;
         nmask = 0;
-        libc::strcpy(cur_header.as_mut_ptr(), new_header.as_ptr());
-        libc::sprintf(
-            new_header.as_mut_ptr(),
-            b"Prodigal_Seq_%d\n\0".as_ptr() as *const c_char,
-            num_seq + 1,
+        std::ptr::copy_nonoverlapping(
+            new_header.as_ptr(),
+            cur_header.as_mut_ptr(),
+            MAX_LINE,
         );
+        {
+            let s = format!("Prodigal_Seq_{}\n", num_seq + 1);
+            let c = std::ffi::CString::new(s).unwrap();
+            let bytes = c.as_bytes_with_nul();
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr() as *const c_char,
+                new_header.as_mut_ptr(),
+                bytes.len().min(MAX_LINE),
+            );
+        }
     }
 
     if num_seq == 0 {
-        libc::fprintf(
-            stderr,
-            b"\nError:  no input sequences to analyze.\n\n\0".as_ptr() as *const c_char,
-        );
+        eprintln!("\nError:  no input sequences to analyze.\n");
         return 18;
     }
 
-    // Free all memory
-    libc::free(seq as *mut c_void);
-    libc::free(rseq as *mut c_void);
-    libc::free(useq as *mut c_void);
-    libc::free(nodes as *mut c_void);
-    libc::free(genes as *mut c_void);
-    for j in 0..NUM_META {
-        libc::free(meta[j].tinf as *mut c_void);
+    // Free metagenomic training data (allocated with Box)
+    for ptr in &meta_tinf_ptrs {
+        drop(Box::from_raw(*ptr));
     }
 
     // Close all filehandles
     seq_reader_close(input_ptr);
-    if output_ptr != stdout {
-        libc::fclose(output_ptr);
+    if output_ptr != stdout_fd {
+        drop(std::fs::File::from_raw_fd(output_ptr));
     }
-    if start_ptr != stdout {
-        libc::fclose(start_ptr);
+    if start_ptr != stdout_fd {
+        drop(std::fs::File::from_raw_fd(start_ptr));
     }
-    if trans_ptr != stdout {
-        libc::fclose(trans_ptr);
+    if trans_ptr != stdout_fd {
+        drop(std::fs::File::from_raw_fd(trans_ptr));
     }
-    if nuc_ptr != stdout {
-        libc::fclose(nuc_ptr);
+    if nuc_ptr != stdout_fd {
+        drop(std::fs::File::from_raw_fd(nuc_ptr));
     }
 
     // Remove tmp file
     if piped == 1 {
-        if libc::remove(input_copy.as_ptr()) != 0 {
-            libc::fprintf(
-                stderr,
-                b"Could not delete tmp file %s.\n\0".as_ptr() as *const c_char,
-                input_copy.as_ptr(),
-            );
+        let path_str = input_copy_cstr.to_str().unwrap_or("");
+        if std::fs::remove_file(path_str).is_err() {
+            eprintln!("Could not delete tmp file {}.", path_str);
             return 18;
         }
     }

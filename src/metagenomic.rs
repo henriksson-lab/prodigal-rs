@@ -140,15 +140,16 @@ pub unsafe extern "C" fn initialize_metagenomic_bins(meta: *mut MetagenomicBin) 
     for i in 0..50 {
         let m = &mut *meta.add(i);
         INIT_FNS[i](m.tinf);
-        libc::sprintf(
-            m.desc.as_mut_ptr(),
-            b"%d|%s|%s|%.1f|%d|%d\0".as_ptr() as *const libc::c_char,
-            i as c_int,
-            DESCS[i].0.as_ptr() as *const libc::c_char,
-            DESCS[i].1.as_ptr() as *const libc::c_char,
-            DESCS[i].2,
-            (*m.tinf).trans_table,
-            (*m.tinf).uses_sd,
+        let name = std::str::from_utf8_unchecked(&DESCS[i].0[..DESCS[i].0.len() - 1]);
+        let domain = std::str::from_utf8_unchecked(&DESCS[i].1[..DESCS[i].1.len() - 1]);
+        let s = format!(
+            "{}|{}|{}|{:.1}|{}|{}\0",
+            i, name, domain, DESCS[i].2, (*m.tinf).trans_table, (*m.tinf).uses_sd
+        );
+        std::ptr::copy_nonoverlapping(
+            s.as_ptr(),
+            m.desc.as_mut_ptr() as *mut u8,
+            s.len().min(500),
         );
     }
 }

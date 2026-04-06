@@ -18,6 +18,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 *******************************************************************************/
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_int, c_uint, c_void};
 
 use crate::types::{Mask, Training, MAX_LINE, MAX_MASKS, MAX_SEQ, MASK_SIZE, WINDOW};
@@ -29,15 +30,78 @@ extern "C" {
     fn test(bm: *const u8, ndx: c_int) -> u8;
     fn set(bm: *mut u8, ndx: c_int);
     fn toggle(bm: *mut u8, ndx: c_int);
-
-    // C stderr stream
-    static stderr: *mut libc::FILE;
 }
 
-/// Helper to get C stderr as *mut libc::FILE for fprintf
-#[inline(always)]
-unsafe fn c_stderr() -> *mut libc::FILE {
-    stderr
+/// Find the length of a NUL-terminated C string in a `*const c_char` buffer.
+#[inline]
+unsafe fn c_strlen(s: *const c_char) -> usize {
+    CStr::from_ptr(s).to_bytes().len()
+}
+
+/// Check if the C string `haystack` contains the substring `needle`.
+/// Returns the offset if found, or None.
+#[inline]
+unsafe fn c_strstr(haystack: *const c_char, needle: &[u8]) -> Option<usize> {
+    let hay = CStr::from_ptr(haystack).to_bytes();
+    let needle_no_nul = if needle.last() == Some(&0) {
+        &needle[..needle.len() - 1]
+    } else {
+        needle
+    };
+    hay.windows(needle_no_nul.len())
+        .position(|w| w == needle_no_nul)
+}
+
+/// Check if `s` starts with `prefix` (up to `n` bytes).
+#[inline]
+unsafe fn c_starts_with(s: *const c_char, prefix: &[u8]) -> bool {
+    let hay = CStr::from_ptr(s).to_bytes();
+    let prefix_no_nul = if prefix.last() == Some(&0) {
+        &prefix[..prefix.len() - 1]
+    } else {
+        prefix
+    };
+    hay.starts_with(prefix_no_nul)
+}
+
+/// Copy a NUL-terminated C string from `src` to `dst`.
+#[inline]
+unsafe fn c_strcpy(dst: *mut c_char, src: *const c_char) {
+    let len = c_strlen(src);
+    std::ptr::copy_nonoverlapping(src, dst, len + 1); // +1 for NUL
+}
+
+/// Copy at most `n` bytes from `src` to `dst` (does NOT NUL-terminate).
+#[inline]
+unsafe fn c_strncpy(dst: *mut c_char, src: *const c_char, n: usize) {
+    std::ptr::copy_nonoverlapping(src, dst, n);
+}
+
+/// Parse an unsigned integer from a C string at the given pointer.
+/// Returns Some(value) on success, None on failure.
+#[inline]
+unsafe fn parse_uint_from_cstr(s: *const c_char) -> Option<c_uint> {
+    let cstr = CStr::from_ptr(s);
+    let bytes = cstr.to_bytes();
+    // Skip leading whitespace
+    let trimmed = bytes.iter().position(|&b| b != b' ' && b != b'\t');
+    if let Some(start) = trimmed {
+        let digits: Vec<u8> = bytes[start..]
+            .iter()
+            .take_while(|&&b| b >= b'0' && b <= b'9')
+            .copied()
+            .collect();
+        if digits.is_empty() {
+            return None;
+        }
+        if let Ok(s) = std::str::from_utf8(&digits) {
+            s.parse::<c_uint>().ok()
+        } else {
+            None
+        }
+    } else {
+        None
+    }
 }
 
 /*******************************************************************************
@@ -72,28 +136,18 @@ pub unsafe extern "C" fn read_seq_training(
     line[MAX_LINE] = 0;
     while seq_reader_gets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
         if hdr == 0
-            && *line.as_ptr().add(libc::strlen(line.as_ptr()) - 1) != b'\n' as c_char
+            && *line.as_ptr().add(c_strlen(line.as_ptr()) - 1) != b'\n' as c_char
             && wrn == 0
         {
             wrn = 1;
-            libc::fprintf(
-                c_stderr(),
-                b"\n\nWarning: saw non-sequence line longer than \0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                c_stderr(),
-                b"%d chars, sequence might not be read \0".as_ptr() as *const c_char,
-                MAX_LINE as c_int,
-            );
-            libc::fprintf(
-                c_stderr(),
-                b"correctly.\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\n\nWarning: saw non-sequence line longer than ");
+            eprint!("{} chars, sequence might not be read ", MAX_LINE);
+            eprintln!("correctly.\n");
         }
         if line[0] == b'>' as c_char
             || (line[0] == b'S' as c_char && line[1] == b'Q' as c_char)
-            || (libc::strlen(line.as_ptr()) > 6
-                && libc::strncmp(line.as_ptr(), b"ORIGIN\0".as_ptr() as *const c_char, 6) == 0)
+            || (c_strlen(line.as_ptr()) > 6
+                && c_starts_with(line.as_ptr(), b"ORIGIN"))
         {
             hdr = 1;
             if fhdr > 0 {
@@ -110,34 +164,24 @@ pub unsafe extern "C" fn read_seq_training(
         } else if hdr == 1 && (line[0] == b'/' as c_char && line[1] == b'/' as c_char) {
             hdr = 0;
         } else if hdr == 1 {
-            if libc::strstr(line.as_ptr(), b"Expand\0".as_ptr() as *const c_char)
-                != std::ptr::null_mut()
-                && libc::strstr(line.as_ptr(), b"gap\0".as_ptr() as *const c_char)
-                    != std::ptr::null_mut()
+            if c_strstr(line.as_ptr(), b"Expand").is_some()
+                && c_strstr(line.as_ptr(), b"gap").is_some()
             {
-                libc::sscanf(
-                    libc::strstr(line.as_ptr(), b"gap\0".as_ptr() as *const c_char).add(4),
-                    b"%u\0".as_ptr() as *const c_char,
-                    &mut gapsize as *mut c_uint,
-                );
+                let gap_offset = c_strstr(line.as_ptr(), b"gap").unwrap();
+                if let Some(val) = parse_uint_from_cstr(line.as_ptr().add(gap_offset + 4)) {
+                    gapsize = val;
+                }
                 if gapsize < 1 || gapsize > MAX_LINE as c_uint {
-                    libc::fprintf(
-                        c_stderr(),
-                        b"Error: gap size in gbk file can't exceed line\0".as_ptr()
-                            as *const c_char,
-                    );
-                    libc::fprintf(
-                        c_stderr(),
-                        b" size.\n\0".as_ptr() as *const c_char,
-                    );
-                    libc::exit(51);
+                    eprint!("Error: gap size in gbk file can't exceed line");
+                    eprintln!(" size.");
+                    std::process::exit(51);
                 }
                 for i in 0..gapsize {
                     line[i as usize] = b'n' as c_char;
                 }
                 line[gapsize as usize] = 0;
             }
-            let slen = libc::strlen(line.as_ptr());
+            let slen = c_strlen(line.as_ptr());
             for i in 0..slen {
                 if (line[i] as u8) < b'A' || (line[i] as u8) > b'z' {
                     continue;
@@ -149,16 +193,9 @@ pub unsafe extern "C" fn read_seq_training(
                 {
                     if len - mask_beg >= MASK_SIZE as c_int {
                         if *nm == MAX_MASKS as c_int {
-                            libc::fprintf(
-                                c_stderr(),
-                                b"Error: saw too many regions of 'N''s in the \0".as_ptr()
-                                    as *const c_char,
-                            );
-                            libc::fprintf(
-                                c_stderr(),
-                                b"sequence.\n\0".as_ptr() as *const c_char,
-                            );
-                            libc::exit(52);
+                            eprint!("Error: saw too many regions of 'N''s in the ");
+                            eprintln!("sequence.");
+                            std::process::exit(52);
                         }
                         (*mlist.add(*nm as usize)).begin = mask_beg;
                         (*mlist.add(*nm as usize)).end = len - 1;
@@ -190,17 +227,8 @@ pub unsafe extern "C" fn read_seq_training(
             }
         }
         if len + MAX_LINE as c_int >= MAX_SEQ as c_int {
-            libc::fprintf(
-                c_stderr(),
-                b"\n\nWarning:  Sequence is long (max %d for training).\n\0".as_ptr()
-                    as *const c_char,
-                MAX_SEQ as c_int,
-            );
-            libc::fprintf(
-                c_stderr(),
-                b"Training on the first %d bases.\n\n\0".as_ptr() as *const c_char,
-                MAX_SEQ as c_int,
-            );
+            eprintln!("\n\nWarning:  Sequence is long (max {} for training).", MAX_SEQ);
+            eprintln!("Training on the first {} bases.\n", MAX_SEQ);
             break;
         }
     }
@@ -243,11 +271,10 @@ pub unsafe extern "C" fn next_seq_multi(
     let mut mask_beg: c_int = -1;
     let mut gapsize: c_uint = 0;
 
-    libc::sprintf(
-        new_hdr,
-        b"Prodigal_Seq_%d\0".as_ptr() as *const c_char,
-        *sctr + 2,
-    );
+    {
+        let s = format!("Prodigal_Seq_{}\0", *sctr + 2);
+        std::ptr::copy_nonoverlapping(s.as_ptr() as *const c_char, new_hdr, s.len());
+    }
 
     if *sctr > 0 {
         reading_seq = 1;
@@ -255,50 +282,40 @@ pub unsafe extern "C" fn next_seq_multi(
     line[MAX_LINE] = 0;
     while seq_reader_gets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
         if reading_seq == 0
-            && *line.as_ptr().add(libc::strlen(line.as_ptr()) - 1) != b'\n' as c_char
+            && *line.as_ptr().add(c_strlen(line.as_ptr()) - 1) != b'\n' as c_char
             && wrn == 0
         {
             wrn = 1;
-            libc::fprintf(
-                c_stderr(),
-                b"\n\nWarning: saw non-sequence line longer than \0".as_ptr() as *const c_char,
-            );
-            libc::fprintf(
-                c_stderr(),
-                b"%d chars, sequence might not be read \0".as_ptr() as *const c_char,
-                MAX_LINE as c_int,
-            );
-            libc::fprintf(
-                c_stderr(),
-                b"correctly.\n\n\0".as_ptr() as *const c_char,
-            );
+            eprint!("\n\nWarning: saw non-sequence line longer than ");
+            eprint!("{} chars, sequence might not be read ", MAX_LINE);
+            eprintln!("correctly.\n");
         }
-        if libc::strlen(line.as_ptr()) > 10
-            && libc::strncmp(line.as_ptr(), b"DEFINITION\0".as_ptr() as *const c_char, 10) == 0
+        if c_strlen(line.as_ptr()) > 10
+            && c_starts_with(line.as_ptr(), b"DEFINITION")
         {
             if genbank_end == 0 {
-                libc::strcpy(cur_hdr, line.as_ptr().add(12));
-                *cur_hdr.add(libc::strlen(cur_hdr) - 1) = 0;
+                c_strcpy(cur_hdr, line.as_ptr().add(12));
+                *cur_hdr.add(c_strlen(cur_hdr) - 1) = 0;
             } else {
-                libc::strcpy(new_hdr, line.as_ptr().add(12));
-                *new_hdr.add(libc::strlen(new_hdr) - 1) = 0;
+                c_strcpy(new_hdr, line.as_ptr().add(12));
+                *new_hdr.add(c_strlen(new_hdr) - 1) = 0;
             }
         }
         if line[0] == b'>' as c_char
             || (line[0] == b'S' as c_char && line[1] == b'Q' as c_char)
-            || (libc::strlen(line.as_ptr()) > 6
-                && libc::strncmp(line.as_ptr(), b"ORIGIN\0".as_ptr() as *const c_char, 6) == 0)
+            || (c_strlen(line.as_ptr()) > 6
+                && c_starts_with(line.as_ptr(), b"ORIGIN"))
         {
             if reading_seq == 1 || genbank_end == 1 || *sctr > 0 {
                 if line[0] == b'>' as c_char {
-                    libc::strcpy(new_hdr, line.as_ptr().add(1));
-                    *new_hdr.add(libc::strlen(new_hdr) - 1) = 0;
+                    c_strcpy(new_hdr, line.as_ptr().add(1));
+                    *new_hdr.add(c_strlen(new_hdr) - 1) = 0;
                 }
                 break;
             }
             if line[0] == b'>' as c_char {
-                libc::strcpy(cur_hdr, line.as_ptr().add(1));
-                *cur_hdr.add(libc::strlen(cur_hdr) - 1) = 0;
+                c_strcpy(cur_hdr, line.as_ptr().add(1));
+                *cur_hdr.add(c_strlen(cur_hdr) - 1) = 0;
             }
             reading_seq = 1;
         } else if reading_seq == 1
@@ -307,34 +324,24 @@ pub unsafe extern "C" fn next_seq_multi(
             reading_seq = 0;
             genbank_end = 1;
         } else if reading_seq == 1 {
-            if libc::strstr(line.as_ptr(), b"Expand\0".as_ptr() as *const c_char)
-                != std::ptr::null_mut()
-                && libc::strstr(line.as_ptr(), b"gap\0".as_ptr() as *const c_char)
-                    != std::ptr::null_mut()
+            if c_strstr(line.as_ptr(), b"Expand").is_some()
+                && c_strstr(line.as_ptr(), b"gap").is_some()
             {
-                libc::sscanf(
-                    libc::strstr(line.as_ptr(), b"gap\0".as_ptr() as *const c_char).add(4),
-                    b"%u\0".as_ptr() as *const c_char,
-                    &mut gapsize as *mut c_uint,
-                );
+                let gap_offset = c_strstr(line.as_ptr(), b"gap").unwrap();
+                if let Some(val) = parse_uint_from_cstr(line.as_ptr().add(gap_offset + 4)) {
+                    gapsize = val;
+                }
                 if gapsize < 1 || gapsize > MAX_LINE as c_uint {
-                    libc::fprintf(
-                        c_stderr(),
-                        b"Error: gap size in gbk file can't exceed line\0".as_ptr()
-                            as *const c_char,
-                    );
-                    libc::fprintf(
-                        c_stderr(),
-                        b" size.\n\0".as_ptr() as *const c_char,
-                    );
-                    libc::exit(54);
+                    eprint!("Error: gap size in gbk file can't exceed line");
+                    eprintln!(" size.");
+                    std::process::exit(54);
                 }
                 for i in 0..gapsize {
                     line[i as usize] = b'n' as c_char;
                 }
                 line[gapsize as usize] = 0;
             }
-            let slen = libc::strlen(line.as_ptr());
+            let slen = c_strlen(line.as_ptr());
             for i in 0..slen {
                 if (line[i] as u8) < b'A' || (line[i] as u8) > b'z' {
                     continue;
@@ -346,16 +353,9 @@ pub unsafe extern "C" fn next_seq_multi(
                 {
                     if len - mask_beg >= MASK_SIZE as c_int {
                         if *nm == MAX_MASKS as c_int {
-                            libc::fprintf(
-                                c_stderr(),
-                                b"Error: saw too many regions of 'N''s in the \0".as_ptr()
-                                    as *const c_char,
-                            );
-                            libc::fprintf(
-                                c_stderr(),
-                                b"sequence.\n\0".as_ptr() as *const c_char,
-                            );
-                            libc::exit(55);
+                            eprint!("Error: saw too many regions of 'N''s in the ");
+                            eprintln!("sequence.");
+                            std::process::exit(55);
                         }
                         (*mlist.add(*nm as usize)).begin = mask_beg;
                         (*mlist.add(*nm as usize)).end = len - 1;
@@ -387,12 +387,8 @@ pub unsafe extern "C" fn next_seq_multi(
             }
         }
         if len + MAX_LINE as c_int >= MAX_SEQ as c_int {
-            libc::fprintf(
-                c_stderr(),
-                b"Sequence too long (max %d permitted).\n\0".as_ptr() as *const c_char,
-                MAX_SEQ as c_int,
-            );
-            libc::exit(56);
+            eprintln!("Sequence too long (max {} permitted).", MAX_SEQ);
+            std::process::exit(56);
         }
     }
     if len == 0 {
@@ -410,8 +406,8 @@ pub unsafe extern "C" fn calc_short_header(
     short_header: *mut c_char,
     sctr: c_int,
 ) {
-    libc::strcpy(short_header, header);
-    let hlen = libc::strlen(header);
+    c_strcpy(short_header, header);
+    let hlen = c_strlen(header);
     let mut i = 0usize;
     while i < hlen {
         if *header.add(i) == b' ' as c_char
@@ -419,18 +415,15 @@ pub unsafe extern "C" fn calc_short_header(
             || *header.add(i) == b'\r' as c_char
             || *header.add(i) == b'\n' as c_char
         {
-            libc::strncpy(short_header, header, i);
+            c_strncpy(short_header, header, i);
             *short_header.add(i) = 0;
             break;
         }
         i += 1;
     }
     if i == 0 {
-        libc::sprintf(
-            short_header,
-            b"Prodigal_Seq_%d\0".as_ptr() as *const c_char,
-            sctr,
-        );
+        let s = format!("Prodigal_Seq_{}\0", sctr);
+        std::ptr::copy_nonoverlapping(s.as_ptr() as *const c_char, short_header, s.len());
     }
 }
 
@@ -913,19 +906,18 @@ pub unsafe extern "C" fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
 
 #[no_mangle]
 pub unsafe extern "C" fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c_int {
-    let gp: *mut c_int = libc::malloc((slen as usize) * std::mem::size_of::<c_double>()) as *mut c_int;
-    let fwd: *mut c_int = libc::malloc((slen as usize) * std::mem::size_of::<c_int>()) as *mut c_int;
-    let bwd: *mut c_int = libc::malloc((slen as usize) * std::mem::size_of::<c_int>()) as *mut c_int;
-    let tot: *mut c_int = libc::malloc((slen as usize) * std::mem::size_of::<c_int>()) as *mut c_int;
+    let mut gp_vec: Vec<c_int> = vec![-1; slen as usize];
+    let gp: *mut c_int = gp_vec.as_mut_ptr();
+    std::mem::forget(gp_vec);
 
-    if fwd.is_null() || bwd.is_null() || gp.is_null() || tot.is_null() {
-        return std::ptr::null_mut();
-    }
+    let mut fwd_vec: Vec<c_int> = vec![0; slen as usize];
+    let mut bwd_vec: Vec<c_int> = vec![0; slen as usize];
+    let mut tot_vec: Vec<c_int> = vec![0; slen as usize];
+    let fwd = fwd_vec.as_mut_ptr();
+    let bwd = bwd_vec.as_mut_ptr();
+    let tot = tot_vec.as_mut_ptr();
 
     for i in 0..slen {
-        *fwd.add(i as usize) = 0;
-        *bwd.add(i as usize) = 0;
-        *tot.add(i as usize) = 0;
         *gp.add(i as usize) = -1;
     }
 
@@ -956,8 +948,8 @@ pub unsafe extern "C" fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c
             *tot.add(i as usize) -= *bwd.add((i + WINDOW as c_int / 2) as usize);
         }
     }
-    libc::free(fwd as *mut c_void);
-    libc::free(bwd as *mut c_void);
+    drop(bwd_vec);
+    drop(fwd_vec);
 
     let mut i = 0;
     while i < slen - 2 {
@@ -971,7 +963,7 @@ pub unsafe extern "C" fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c
         }
         i += 3;
     }
-    libc::free(tot as *mut c_void);
+    drop(tot_vec);
     gp
 }
 
@@ -1010,7 +1002,7 @@ pub unsafe extern "C" fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
         b'T' as c_char,
     ];
     if len == 0 {
-        libc::strcpy(qt, b"None\0".as_ptr() as *const c_char);
+        c_strcpy(qt, b"None\0".as_ptr() as *const c_char);
     } else {
         for i in 0..len {
             let mut val = (ndx & (1 << (2 * i))) + (ndx & (1 << (2 * i + 1)));
@@ -1036,10 +1028,8 @@ pub unsafe extern "C" fn calc_mer_bg(
     for _i in 0..len {
         size *= 4;
     }
-    let counts: *mut c_int = libc::malloc((size as usize) * std::mem::size_of::<c_int>()) as *mut c_int;
-    for i in 0..size {
-        *counts.add(i as usize) = 0;
-    }
+    let mut counts_vec: Vec<c_int> = vec![0; size as usize];
+    let counts = counts_vec.as_mut_ptr();
     for i in 0..(slen - len + 1) {
         *counts.add(mer_ndx(len, seq, i) as usize) += 1;
         *counts.add(mer_ndx(len, rseq, i) as usize) += 1;
@@ -1048,7 +1038,7 @@ pub unsafe extern "C" fn calc_mer_bg(
     for i in 0..size {
         *bg.add(i as usize) = (*counts.add(i as usize) as c_double * 1.0) / (glob as c_double * 1.0);
     }
-    libc::free(counts as *mut c_void);
+    drop(counts_vec);
 }
 
 /*******************************************************************************

@@ -134,9 +134,9 @@ pub unsafe extern "C" fn seq_reader_gets(
 #[no_mangle]
 pub unsafe extern "C" fn seq_reader_seek(
     handle: *mut c_void,
-    _offset: libc::c_long,
+    _offset: i64,
     _whence: c_int,
-) -> libc::c_long {
+) -> i64 {
     let reader = &mut *(handle as *mut SeqReader);
     if reader.rewind() { 0 } else { -1 }
 }
