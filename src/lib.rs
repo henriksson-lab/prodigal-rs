@@ -1,27 +1,22 @@
-pub mod ffi;
-
-use std::ffi::CString;
-use std::os::raw::c_char;
+pub mod types;
+pub mod bitmap;
+pub mod training;
+pub mod training_data;
+pub mod sequence;
+pub mod node;
+pub mod dprog;
+pub mod gene;
+pub mod metagenomic;
+pub mod pipeline;
 
 /// Run Prodigal with the given command-line arguments.
 ///
 /// `args` should be the full argv including the program name as the first element.
 ///
-/// # Panics
-///
-/// Panics if any argument contains an interior NUL byte.
-///
 /// # Safety
 ///
-/// The underlying C code calls `exit()` on errors and on `-h`/`-v` flags.
-/// Use [`run_prodigal_safe`] to catch those exits in a subprocess if needed.
+/// The underlying code calls `exit()` on errors and on `-h`/`-v` flags.
 pub fn run_prodigal(args: &[&str]) -> i32 {
-    let c_strings: Vec<CString> = args
-        .iter()
-        .map(|s| CString::new(*s).expect("argument contains NUL byte"))
-        .collect();
-
-    let c_ptrs: Vec<*const c_char> = c_strings.iter().map(|s| s.as_ptr()).collect();
-
-    unsafe { ffi::prodigal_c_main(c_ptrs.len() as i32, c_ptrs.as_ptr()) }
+    let owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    unsafe { pipeline::run_pipeline(&owned) }
 }

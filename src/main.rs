@@ -1,12 +1,9 @@
 use clap::Parser;
-use std::ffi::CString;
-use std::os::raw::c_char;
 use std::process;
 
 /// Prokaryotic gene prediction using dynamic programming.
 ///
-/// This is a Rust wrapper around Prodigal v2.6.3.
-/// All flags are forwarded to the underlying C implementation.
+/// Prodigal v2.6.3 — fully rewritten in Rust.
 #[derive(Parser, Debug)]
 #[command(name = "prodigal-rs", version = "2.6.3")]
 struct Cli {
@@ -66,7 +63,6 @@ struct Cli {
 fn main() {
     let cli = Cli::parse();
 
-    // Build the C-style argv from parsed arguments
     let mut args: Vec<String> = vec!["prodigal".to_string()];
 
     if let Some(ref f) = cli.trans_file {
@@ -118,13 +114,7 @@ fn main() {
         args.push(f.clone());
     }
 
-    let c_strings: Vec<CString> = args
-        .iter()
-        .map(|s| CString::new(s.as_str()).unwrap())
-        .collect();
-    let c_ptrs: Vec<*const c_char> = c_strings.iter().map(|s| s.as_ptr()).collect();
-
-    let rc = unsafe { prodigal::ffi::prodigal_c_main(c_ptrs.len() as i32, c_ptrs.as_ptr()) };
+    let rc = unsafe { prodigal::pipeline::run_pipeline(&args) };
 
     process::exit(rc);
 }

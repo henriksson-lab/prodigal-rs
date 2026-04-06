@@ -1,0 +1,2685 @@
+/*******************************************************************************
+    PRODIGAL (PROkaryotic DynamIc Programming Genefinding ALgorithm)
+    Copyright (C) 2007-2016 University of Tennessee / UT-Battelle
+
+    Code Author:  Doug Hyatt
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*******************************************************************************/
+
+use std::os::raw::{c_char, c_int, c_void};
+
+use crate::types::{
+    Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_LINE, MAX_SAM_OVLP,
+    META_PEN, MIN_EDGE_GENE, MIN_GENE, OPER_DIST, STOP, TTG,
+};
+
+extern "C" {
+    // sequence.rs functions
+    fn is_stop(seq: *const u8, n: c_int, tinf: *const Training) -> c_int;
+    fn is_start(seq: *const u8, n: c_int, tinf: *const Training) -> c_int;
+    fn is_atg(seq: *const u8, n: c_int) -> c_int;
+    fn is_gtg(seq: *const u8, n: c_int) -> c_int;
+    fn is_ttg(seq: *const u8, n: c_int) -> c_int;
+    fn is_gc(seq: *const u8, n: c_int) -> c_int;
+    fn mer_ndx(len: c_int, seq: *const u8, ndx: c_int) -> c_int;
+    fn shine_dalgarno_exact(
+        seq: *const u8,
+        pos: c_int,
+        start: c_int,
+        wt: *const f64,
+    ) -> c_int;
+    fn shine_dalgarno_mm(
+        seq: *const u8,
+        pos: c_int,
+        start: c_int,
+        wt: *const f64,
+    ) -> c_int;
+    fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int;
+    fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int);
+    fn calc_mer_bg(len: c_int, seq: *const u8, rseq: *const u8, slen: c_int, bg: *mut f64);
+
+    // bitmap.rs functions
+    fn test(bm: *const u8, ndx: c_int) -> u8;
+    fn set(bm: *mut u8, ndx: c_int);
+
+    // C stderr stream
+    static stderr: *mut libc::FILE;
+}
+
+/*******************************************************************************
+  Adds nodes to the node list.  Genes must be >=90bp in length, unless they
+  run off the edge, in which case they only have to be 50bp.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn add_nodes(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nodes: *mut Node,
+    closed: c_int,
+    mlist: *mut Mask,
+    nm: c_int,
+    tinf: *mut Training,
+) -> c_int {
+    let mut nn: c_int = 0;
+    let mut last: [c_int; 3] = [0; 3];
+    let mut saw_start: [c_int; 3] = [0; 3];
+    let mut min_dist: [c_int; 3] = [0; 3];
+    let slmod = slen % 3;
+
+    /* Forward strand nodes */
+    for i in 0..3 {
+        last[((i + slmod) % 3) as usize] = slen + i;
+        saw_start[(i % 3) as usize] = 0;
+        min_dist[(i % 3) as usize] = MIN_EDGE_GENE;
+        if closed == 0 {
+            while last[((i + slmod) % 3) as usize] + 2 > slen - 1 {
+                last[((i + slmod) % 3) as usize] -= 3;
+            }
+        }
+    }
+    let mut i = slen - 3;
+    while i >= 0 {
+        if is_stop(seq, i, tinf) == 1 {
+            if saw_start[(i % 3) as usize] == 1 {
+                if is_stop(seq, last[(i % 3) as usize], tinf) == 0 {
+                    (*nodes.offset(nn as isize)).edge = 1;
+                }
+                (*nodes.offset(nn as isize)).ndx = last[(i % 3) as usize];
+                (*nodes.offset(nn as isize)).type_ = STOP;
+                (*nodes.offset(nn as isize)).strand = 1;
+                (*nodes.offset(nn as isize)).stop_val = i;
+                nn += 1;
+            }
+            min_dist[(i % 3) as usize] = MIN_GENE;
+            last[(i % 3) as usize] = i;
+            saw_start[(i % 3) as usize] = 0;
+            i -= 1;
+            continue;
+        }
+        if last[(i % 3) as usize] >= slen {
+            i -= 1;
+            continue;
+        }
+
+        if is_start(seq, i, tinf) == 1
+            && is_atg(seq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = i;
+            (*nodes.offset(nn as isize)).type_ = ATG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
+            (*nodes.offset(nn as isize)).strand = 1;
+            nn += 1;
+        } else if is_start(seq, i, tinf) == 1
+            && is_gtg(seq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = i;
+            (*nodes.offset(nn as isize)).type_ = GTG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
+            (*nodes.offset(nn as isize)).strand = 1;
+            nn += 1;
+        } else if is_start(seq, i, tinf) == 1
+            && is_ttg(seq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = i;
+            (*nodes.offset(nn as isize)).type_ = TTG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
+            (*nodes.offset(nn as isize)).strand = 1;
+            nn += 1;
+        } else if i <= 2
+            && closed == 0
+            && (last[(i % 3) as usize] - i) > MIN_EDGE_GENE
+            && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = i;
+            (*nodes.offset(nn as isize)).type_ = ATG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).edge = 1;
+            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
+            (*nodes.offset(nn as isize)).strand = 1;
+            nn += 1;
+        }
+        i -= 1;
+    }
+    for i in 0..3 {
+        if saw_start[(i % 3) as usize] == 1 {
+            if is_stop(seq, last[(i % 3) as usize], tinf) == 0 {
+                (*nodes.offset(nn as isize)).edge = 1;
+            }
+            (*nodes.offset(nn as isize)).ndx = last[(i % 3) as usize];
+            (*nodes.offset(nn as isize)).type_ = STOP;
+            (*nodes.offset(nn as isize)).strand = 1;
+            (*nodes.offset(nn as isize)).stop_val = i - 6;
+            nn += 1;
+        }
+    }
+
+    /* Reverse strand nodes */
+    for i in 0..3 {
+        last[((i + slmod) % 3) as usize] = slen + i;
+        saw_start[(i % 3) as usize] = 0;
+        min_dist[(i % 3) as usize] = MIN_EDGE_GENE;
+        if closed == 0 {
+            while last[((i + slmod) % 3) as usize] + 2 > slen - 1 {
+                last[((i + slmod) % 3) as usize] -= 3;
+            }
+        }
+    }
+    i = slen - 3;
+    while i >= 0 {
+        if is_stop(rseq, i, tinf) == 1 {
+            if saw_start[(i % 3) as usize] == 1 {
+                if is_stop(rseq, last[(i % 3) as usize], tinf) == 0 {
+                    (*nodes.offset(nn as isize)).edge = 1;
+                }
+                (*nodes.offset(nn as isize)).ndx = slen - last[(i % 3) as usize] - 1;
+                (*nodes.offset(nn as isize)).type_ = STOP;
+                (*nodes.offset(nn as isize)).strand = -1;
+                (*nodes.offset(nn as isize)).stop_val = slen - i - 1;
+                nn += 1;
+            }
+            min_dist[(i % 3) as usize] = MIN_GENE;
+            last[(i % 3) as usize] = i;
+            saw_start[(i % 3) as usize] = 0;
+            i -= 1;
+            continue;
+        }
+        if last[(i % 3) as usize] >= slen {
+            i -= 1;
+            continue;
+        }
+
+        if is_start(rseq, i, tinf) == 1
+            && is_atg(rseq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(
+                slen - last[(i % 3) as usize] - 1,
+                slen - i - 1,
+                mlist,
+                nm,
+            ) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
+            (*nodes.offset(nn as isize)).type_ = ATG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*nodes.offset(nn as isize)).strand = -1;
+            nn += 1;
+        } else if is_start(rseq, i, tinf) == 1
+            && is_gtg(rseq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(
+                slen - last[(i % 3) as usize] - 1,
+                slen - i - 1,
+                mlist,
+                nm,
+            ) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
+            (*nodes.offset(nn as isize)).type_ = GTG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*nodes.offset(nn as isize)).strand = -1;
+            nn += 1;
+        } else if is_start(rseq, i, tinf) == 1
+            && is_ttg(rseq, i) == 1
+            && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
+            && cross_mask(
+                slen - last[(i % 3) as usize] - 1,
+                slen - i - 1,
+                mlist,
+                nm,
+            ) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
+            (*nodes.offset(nn as isize)).type_ = TTG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*nodes.offset(nn as isize)).strand = -1;
+            nn += 1;
+        } else if i <= 2
+            && closed == 0
+            && (last[(i % 3) as usize] - i) > MIN_EDGE_GENE
+            && cross_mask(
+                slen - last[(i % 3) as usize] - 1,
+                slen - i - 1,
+                mlist,
+                nm,
+            ) == 0
+        {
+            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
+            (*nodes.offset(nn as isize)).type_ = ATG;
+            saw_start[(i % 3) as usize] = 1;
+            (*nodes.offset(nn as isize)).edge = 1;
+            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*nodes.offset(nn as isize)).strand = -1;
+            nn += 1;
+        }
+        i -= 1;
+    }
+    for i in 0..3 {
+        if saw_start[(i % 3) as usize] == 1 {
+            if is_stop(rseq, last[(i % 3) as usize], tinf) == 0 {
+                (*nodes.offset(nn as isize)).edge = 1;
+            }
+            (*nodes.offset(nn as isize)).ndx = slen - last[(i % 3) as usize] - 1;
+            (*nodes.offset(nn as isize)).type_ = STOP;
+            (*nodes.offset(nn as isize)).strand = -1;
+            (*nodes.offset(nn as isize)).stop_val = slen - i + 5;
+            nn += 1;
+        }
+    }
+    nn
+}
+
+/* Simple routine to zero out the node scores */
+
+#[no_mangle]
+pub unsafe extern "C" fn reset_node_scores(nod: *mut Node, nn: c_int) {
+    for i in 0..nn as isize {
+        for j in 0..3 {
+            (*nod.offset(i)).star_ptr[j] = 0;
+            (*nod.offset(i)).gc_score[j] = 0.0;
+        }
+        for j in 0..2 {
+            (*nod.offset(i)).rbs[j] = 0;
+        }
+        (*nod.offset(i)).score = 0.0;
+        (*nod.offset(i)).cscore = 0.0;
+        (*nod.offset(i)).sscore = 0.0;
+        (*nod.offset(i)).rscore = 0.0;
+        (*nod.offset(i)).tscore = 0.0;
+        (*nod.offset(i)).uscore = 0.0;
+        (*nod.offset(i)).traceb = -1;
+        (*nod.offset(i)).tracef = -1;
+        (*nod.offset(i)).ov_mark = -1;
+        (*nod.offset(i)).elim = 0;
+        (*nod.offset(i)).gc_bias = 0;
+        std::ptr::write_bytes(&mut (*nod.offset(i)).mot as *mut Motif, 0, 1);
+    }
+}
+
+/*******************************************************************************
+  Since dynamic programming can't go 'backwards', we have to record
+  information about overlapping genes in order to build the models.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn record_overlapping_starts(
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+    flag: c_int,
+) {
+    let mut max_sc: f64;
+
+    for i in 0..nn {
+        for j in 0..3 {
+            (*nod.offset(i as isize)).star_ptr[j] = -1;
+        }
+        if (*nod.offset(i as isize)).type_ != STOP || (*nod.offset(i as isize)).edge == 1 {
+            continue;
+        }
+        if (*nod.offset(i as isize)).strand == 1 {
+            max_sc = -100.0;
+            let mut j = i + 3;
+            loop {
+                if j < 0 {
+                    break;
+                }
+                if j >= nn || (*nod.offset(j as isize)).ndx > (*nod.offset(i as isize)).ndx + 2 {
+                    j -= 1;
+                    continue;
+                }
+                if (*nod.offset(j as isize)).ndx + MAX_SAM_OVLP < (*nod.offset(i as isize)).ndx {
+                    break;
+                }
+                if (*nod.offset(j as isize)).strand == 1 && (*nod.offset(j as isize)).type_ != STOP
+                {
+                    if (*nod.offset(j as isize)).stop_val <= (*nod.offset(i as isize)).ndx {
+                        j -= 1;
+                        continue;
+                    }
+                    if flag == 0
+                        && (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize]
+                            == -1
+                    {
+                        (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
+                    } else if flag == 1
+                        && ((*nod.offset(j as isize)).cscore + (*nod.offset(j as isize)).sscore
+                            + intergenic_mod(
+                                &mut *nod.offset(i as isize),
+                                &mut *nod.offset(j as isize),
+                                tinf,
+                            )
+                            > max_sc)
+                    {
+                        (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
+                        max_sc = (*nod.offset(j as isize)).cscore
+                            + (*nod.offset(j as isize)).sscore
+                            + intergenic_mod(
+                                &mut *nod.offset(i as isize),
+                                &mut *nod.offset(j as isize),
+                                tinf,
+                            );
+                    }
+                }
+                j -= 1;
+            }
+        } else {
+            max_sc = -100.0;
+            let mut j = i - 3;
+            while j < nn {
+                if j < 0
+                    || (*nod.offset(j as isize)).ndx < (*nod.offset(i as isize)).ndx - 2
+                {
+                    j += 1;
+                    continue;
+                }
+                if (*nod.offset(j as isize)).ndx - MAX_SAM_OVLP > (*nod.offset(i as isize)).ndx {
+                    break;
+                }
+                if (*nod.offset(j as isize)).strand == -1
+                    && (*nod.offset(j as isize)).type_ != STOP
+                {
+                    if (*nod.offset(j as isize)).stop_val >= (*nod.offset(i as isize)).ndx {
+                        j += 1;
+                        continue;
+                    }
+                    if flag == 0
+                        && (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize]
+                            == -1
+                    {
+                        (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
+                    } else if flag == 1
+                        && ((*nod.offset(j as isize)).cscore + (*nod.offset(j as isize)).sscore
+                            + intergenic_mod(
+                                &mut *nod.offset(j as isize),
+                                &mut *nod.offset(i as isize),
+                                tinf,
+                            )
+                            > max_sc)
+                    {
+                        (*nod.offset(i as isize)).star_ptr
+                            [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
+                        max_sc = (*nod.offset(j as isize)).cscore
+                            + (*nod.offset(j as isize)).sscore
+                            + intergenic_mod(
+                                &mut *nod.offset(j as isize),
+                                &mut *nod.offset(i as isize),
+                                tinf,
+                            );
+                    }
+                }
+                j += 1;
+            }
+        }
+    }
+}
+
+/*******************************************************************************
+  This routine goes through all the ORFs and counts the relative frequency of
+  the most common frame for G+C content.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn record_gc_bias(
+    gc: *mut c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut ctr: [[c_int; 3]; 3] = [[0; 3]; 3];
+    let mut last: [c_int; 3] = [0; 3];
+    let mut tot: f64 = 0.0;
+
+    if nn == 0 {
+        return;
+    }
+    for i in 0..3 {
+        for j in 0..3 {
+            ctr[i][j] = 0;
+        }
+    }
+    let mut i = nn - 1;
+    while i >= 0 {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        let frmod = 3 - fr as c_int;
+        if (*nod.offset(i as isize)).strand == 1 && (*nod.offset(i as isize)).type_ == STOP {
+            for j in 0..3 {
+                ctr[fr][j] = 0;
+            }
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            ctr[fr][((*gc.offset((*nod.offset(i as isize)).ndx as isize) + frmod) % 3) as usize] =
+                1;
+        } else if (*nod.offset(i as isize)).strand == 1 {
+            let mut j = last[fr] - 3;
+            while j >= (*nod.offset(i as isize)).ndx {
+                ctr[fr][((*gc.offset(j as isize) + frmod) % 3) as usize] += 1;
+                j -= 3;
+            }
+            let mfr = max_fr(ctr[fr][0], ctr[fr][1], ctr[fr][2]);
+            (*nod.offset(i as isize)).gc_bias = mfr;
+            for j in 0..3 {
+                (*nod.offset(i as isize)).gc_score[j] = 3.0 * ctr[fr][j] as f64;
+                (*nod.offset(i as isize)).gc_score[j] /= 1.0
+                    * ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx + 3)
+                        as f64;
+            }
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+        i -= 1;
+    }
+    for i in 0..nn {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        let frmod = fr as c_int;
+        if (*nod.offset(i as isize)).strand == -1 && (*nod.offset(i as isize)).type_ == STOP {
+            for j in 0..3 {
+                ctr[fr][j] = 0;
+            }
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            ctr[fr][((3 - *gc.offset((*nod.offset(i as isize)).ndx as isize) + frmod) % 3)
+                as usize] = 1;
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            let mut j = last[fr] + 3;
+            while j <= (*nod.offset(i as isize)).ndx {
+                ctr[fr][((3 - *gc.offset(j as isize) + frmod) % 3) as usize] += 1;
+                j += 3;
+            }
+            let mfr = max_fr(ctr[fr][0], ctr[fr][1], ctr[fr][2]);
+            (*nod.offset(i as isize)).gc_bias = mfr;
+            for j in 0..3 {
+                (*nod.offset(i as isize)).gc_score[j] = 3.0 * ctr[fr][j] as f64;
+                (*nod.offset(i as isize)).gc_score[j] /= 1.0
+                    * ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val + 3)
+                        as f64;
+            }
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+    }
+
+    for i in 0..3 {
+        (*tinf).bias[i] = 0.0;
+    }
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ != STOP {
+            let len = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
+                + 1;
+            (*tinf).bias[(*nod.offset(i as isize)).gc_bias as usize] += (*nod.offset(i as isize))
+                .gc_score[(*nod.offset(i as isize)).gc_bias as usize]
+                * len as f64
+                / 1000.0;
+        }
+    }
+    tot = (*tinf).bias[0] + (*tinf).bias[1] + (*tinf).bias[2];
+    for i in 0..3 {
+        (*tinf).bias[i] *= 3.0 / tot;
+    }
+}
+
+/*******************************************************************************
+  Simple routine that calculates the dicodon frequency in genes and in the
+  background, and then stores the log likelihood of each 6-mer relative to the
+  background.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn calc_dicodon_gene(
+    tinf: *mut Training,
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    dbeg: c_int,
+) {
+    let mut counts: [c_int; 4096] = [0; 4096];
+    let mut glob: c_int = 0;
+    let mut prob: [f64; 4096] = [0.0; 4096];
+    let mut bg: [f64; 4096] = [0.0; 4096];
+    let mut left: c_int;
+    let mut right: c_int;
+    let mut in_gene: c_int;
+
+    left = -1;
+    right = -1;
+    calc_mer_bg(6, seq, rseq, slen, bg.as_mut_ptr());
+    let mut path = dbeg;
+    in_gene = 0;
+    while path != -1 {
+        if (*nod.offset(path as isize)).strand == -1
+            && (*nod.offset(path as isize)).type_ != STOP
+        {
+            in_gene = -1;
+            left = slen - (*nod.offset(path as isize)).ndx - 1;
+        }
+        if (*nod.offset(path as isize)).strand == 1
+            && (*nod.offset(path as isize)).type_ == STOP
+        {
+            in_gene = 1;
+            right = (*nod.offset(path as isize)).ndx + 2;
+        }
+        if in_gene == -1
+            && (*nod.offset(path as isize)).strand == -1
+            && (*nod.offset(path as isize)).type_ == STOP
+        {
+            right = slen - (*nod.offset(path as isize)).ndx + 1;
+            let mut i = left;
+            while i < right - 5 {
+                counts[mer_ndx(6, rseq, i) as usize] += 1;
+                glob += 1;
+                i += 3;
+            }
+            in_gene = 0;
+        }
+        if in_gene == 1
+            && (*nod.offset(path as isize)).strand == 1
+            && (*nod.offset(path as isize)).type_ != STOP
+        {
+            left = (*nod.offset(path as isize)).ndx;
+            let mut i = left;
+            while i < right - 5 {
+                counts[mer_ndx(6, seq, i) as usize] += 1;
+                glob += 1;
+                i += 3;
+            }
+            in_gene = 0;
+        }
+        path = (*nod.offset(path as isize)).traceb;
+    }
+    for i in 0..4096 {
+        prob[i] = (counts[i] as f64 * 1.0) / (glob as f64 * 1.0);
+        if prob[i] == 0.0 && bg[i] != 0.0 {
+            (*tinf).gene_dc[i] = -5.0;
+        } else if bg[i] == 0.0 {
+            (*tinf).gene_dc[i] = 0.0;
+        } else {
+            (*tinf).gene_dc[i] = (prob[i] / bg[i]).ln();
+        }
+        if (*tinf).gene_dc[i] > 5.0 {
+            (*tinf).gene_dc[i] = 5.0;
+        }
+        if (*tinf).gene_dc[i] < -5.0 {
+            (*tinf).gene_dc[i] = -5.0;
+        }
+    }
+}
+
+/*******************************************************************************
+  calc_amino_bg - declared in header but not defined in original C code.
+  Included as a stub for link compatibility.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn calc_amino_bg(
+    _tinf: *mut Training,
+    _seq: *mut u8,
+    _rseq: *mut u8,
+    _slen: c_int,
+    _nod: *mut Node,
+    _nn: c_int,
+) {
+    /* Not implemented in original Prodigal */
+}
+
+/*******************************************************************************
+  Scoring function for all the start nodes.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn score_nodes(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+    closed: c_int,
+    is_meta: c_int,
+) {
+    let mut negf: f64;
+    let mut posf: f64;
+    let mut rbs1: f64;
+    let mut rbs2: f64;
+    let mut sd_score: f64;
+    let mut edge_gene: f64;
+    let mut min_meta_len: f64;
+
+    /* Step 1: Calculate raw coding potential for every start-stop pair. */
+    calc_orf_gc(seq, rseq, slen, nod, nn, tinf);
+    raw_coding_score(seq, rseq, slen, nod, nn, tinf);
+
+    /* Step 2: Calculate raw RBS Scores for every start node. */
+    if (*tinf).uses_sd == 1 {
+        rbs_score(seq, rseq, slen, nod, nn, tinf);
+    } else {
+        for i in 0..nn {
+            if (*nod.offset(i as isize)).type_ == STOP || (*nod.offset(i as isize)).edge == 1 {
+                continue;
+            }
+            find_best_upstream_motif(tinf, seq, rseq, slen, &mut *nod.offset(i as isize), 2);
+        }
+    }
+
+    /* Step 3: Score the start nodes */
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ == STOP {
+            continue;
+        }
+
+        /* Does this gene run off the edge? */
+        edge_gene = 0.0;
+        if (*nod.offset(i as isize)).edge == 1 {
+            edge_gene += 1.0;
+        }
+        if ((*nod.offset(i as isize)).strand == 1
+            && is_stop(seq, (*nod.offset(i as isize)).stop_val, tinf) == 0)
+            || ((*nod.offset(i as isize)).strand == -1
+                && is_stop(rseq, slen - 1 - (*nod.offset(i as isize)).stop_val, tinf) == 0)
+        {
+            edge_gene += 1.0;
+        }
+
+        /* Edge Nodes : stops with no starts, give a small bonus */
+        if (*nod.offset(i as isize)).edge == 1 {
+            (*nod.offset(i as isize)).tscore = EDGE_BONUS * (*tinf).st_wt / edge_gene;
+            (*nod.offset(i as isize)).uscore = 0.0;
+            (*nod.offset(i as isize)).rscore = 0.0;
+        } else {
+            /* Type Score */
+            (*nod.offset(i as isize)).tscore =
+                (*tinf).type_wt[(*nod.offset(i as isize)).type_ as usize] * (*tinf).st_wt;
+
+            /* RBS Motif Score */
+            rbs1 = (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[0] as usize];
+            rbs2 = (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[1] as usize];
+            sd_score = dmax(rbs1, rbs2) * (*tinf).st_wt;
+            if (*tinf).uses_sd == 1 {
+                (*nod.offset(i as isize)).rscore = sd_score;
+            } else {
+                (*nod.offset(i as isize)).rscore =
+                    (*tinf).st_wt * (*nod.offset(i as isize)).mot.score;
+                if (*nod.offset(i as isize)).rscore < sd_score && (*tinf).no_mot > -0.5 {
+                    (*nod.offset(i as isize)).rscore = sd_score;
+                }
+            }
+
+            /* Upstream Score */
+            if (*nod.offset(i as isize)).strand == 1 {
+                score_upstream_composition(seq, slen, &mut *nod.offset(i as isize), tinf);
+            } else {
+                score_upstream_composition(rseq, slen, &mut *nod.offset(i as isize), tinf);
+            }
+
+            /* Penalize upstream score if choosing this start would stop
+               the gene from running off the edge. */
+            if closed == 0 && (*nod.offset(i as isize)).ndx <= 2
+                && (*nod.offset(i as isize)).strand == 1
+            {
+                (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
+            } else if closed == 0
+                && (*nod.offset(i as isize)).ndx >= slen - 3
+                && (*nod.offset(i as isize)).strand == -1
+            {
+                (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
+            } else if i < 500 && (*nod.offset(i as isize)).strand == 1 {
+                let mut j = i - 1;
+                while j >= 0 {
+                    if (*nod.offset(j as isize)).edge == 1
+                        && (*nod.offset(i as isize)).stop_val
+                            == (*nod.offset(j as isize)).stop_val
+                    {
+                        (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
+                        break;
+                    }
+                    j -= 1;
+                }
+            } else if i >= nn - 500 && (*nod.offset(i as isize)).strand == -1 {
+                let mut j = i + 1;
+                while j < nn {
+                    if (*nod.offset(j as isize)).edge == 1
+                        && (*nod.offset(i as isize)).stop_val
+                            == (*nod.offset(j as isize)).stop_val
+                    {
+                        (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+        }
+
+        /* Convert starts at base 1 and slen to edge genes if closed = 0 */
+        if (((*nod.offset(i as isize)).ndx <= 2 && (*nod.offset(i as isize)).strand == 1)
+            || ((*nod.offset(i as isize)).ndx >= slen - 3
+                && (*nod.offset(i as isize)).strand == -1))
+            && (*nod.offset(i as isize)).edge == 0
+            && closed == 0
+        {
+            edge_gene += 1.0;
+            (*nod.offset(i as isize)).edge = 1;
+            (*nod.offset(i as isize)).tscore = 0.0;
+            (*nod.offset(i as isize)).uscore = EDGE_BONUS * (*tinf).st_wt / edge_gene;
+            (*nod.offset(i as isize)).rscore = 0.0;
+        }
+
+        /* Penalize starts with no stop codon */
+        if (*nod.offset(i as isize)).edge == 0 && edge_gene == 1.0 {
+            (*nod.offset(i as isize)).uscore -= 0.5 * EDGE_BONUS * (*tinf).st_wt;
+        }
+
+        /* Penalize non-edge genes < 250bp */
+        if edge_gene == 0.0
+            && ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() < 250
+        {
+            negf = 250.0
+                / ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
+                    as f64;
+            posf = ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
+                as f64
+                / 250.0;
+            if (*nod.offset(i as isize)).rscore < 0.0 {
+                (*nod.offset(i as isize)).rscore *= negf;
+            }
+            if (*nod.offset(i as isize)).uscore < 0.0 {
+                (*nod.offset(i as isize)).uscore *= negf;
+            }
+            if (*nod.offset(i as isize)).tscore < 0.0 {
+                (*nod.offset(i as isize)).tscore *= negf;
+            }
+            if (*nod.offset(i as isize)).rscore > 0.0 {
+                (*nod.offset(i as isize)).rscore *= posf;
+            }
+            if (*nod.offset(i as isize)).uscore > 0.0 {
+                (*nod.offset(i as isize)).uscore *= posf;
+            }
+            if (*nod.offset(i as isize)).tscore > 0.0 {
+                (*nod.offset(i as isize)).tscore *= posf;
+            }
+        }
+
+        /* Coding Penalization in Metagenomic Fragments */
+        if is_meta == 1
+            && slen < 3000
+            && edge_gene == 0.0
+            && ((*nod.offset(i as isize)).cscore < 5.0
+                || ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
+                    < 120)
+        {
+            (*nod.offset(i as isize)).cscore -=
+                META_PEN * dmax(0.0, (3000 - slen) as f64 / 2700.0);
+        }
+
+        /* Base Start Score */
+        (*nod.offset(i as isize)).sscore = (*nod.offset(i as isize)).tscore
+            + (*nod.offset(i as isize)).rscore
+            + (*nod.offset(i as isize)).uscore;
+
+        /* Penalize starts if coding is negative. */
+        if (*nod.offset(i as isize)).cscore < 0.0 {
+            if edge_gene > 0.0 && (*nod.offset(i as isize)).edge == 0 {
+                if is_meta == 0 || slen > 1500 {
+                    (*nod.offset(i as isize)).sscore -= (*tinf).st_wt;
+                } else {
+                    (*nod.offset(i as isize)).sscore -= 10.31 - 0.004 * slen as f64;
+                }
+            } else if is_meta == 1 && slen < 3000 && (*nod.offset(i as isize)).edge == 1 {
+                min_meta_len = (slen as f64).sqrt() * 5.0;
+                if ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
+                    as f64
+                    >= min_meta_len
+                {
+                    if (*nod.offset(i as isize)).cscore >= 0.0 {
+                        (*nod.offset(i as isize)).cscore = -1.0;
+                    }
+                    (*nod.offset(i as isize)).sscore = 0.0;
+                    (*nod.offset(i as isize)).uscore = 0.0;
+                }
+            } else {
+                (*nod.offset(i as isize)).sscore -= 0.5;
+            }
+        } else if (*nod.offset(i as isize)).cscore < 5.0
+            && is_meta == 1
+            && ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() < 120
+            && (*nod.offset(i as isize)).sscore < 0.0
+        {
+            (*nod.offset(i as isize)).sscore -= (*tinf).st_wt;
+        }
+    }
+}
+
+/* Calculate the GC Content for each start-stop pair */
+#[no_mangle]
+pub unsafe extern "C" fn calc_orf_gc(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut last: [c_int; 3] = [0; 3];
+    let mut gc: [f64; 3] = [0.0; 3];
+    let mut gsize: f64;
+
+    /* Go through each start-stop pair and calculate the %GC of the gene */
+    for k in 0..3 {
+        gc[k] = 0.0;
+    }
+    let mut i = nn - 1;
+    while i >= 0 {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == 1 && (*nod.offset(i as isize)).type_ == STOP {
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            gc[fr] = is_gc(seq, (*nod.offset(i as isize)).ndx) as f64
+                + is_gc(seq, (*nod.offset(i as isize)).ndx + 1) as f64
+                + is_gc(seq, (*nod.offset(i as isize)).ndx + 2) as f64;
+        } else if (*nod.offset(i as isize)).strand == 1 {
+            let mut j = last[fr] - 3;
+            while j >= (*nod.offset(i as isize)).ndx {
+                gc[fr] += is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64
+                    + is_gc(seq, j + 2) as f64;
+                j -= 3;
+            }
+            gsize = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
+                as f64
+                + 3.0;
+            (*nod.offset(i as isize)).gc_cont = gc[fr] / gsize;
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+        i -= 1;
+    }
+    for k in 0..3 {
+        gc[k] = 0.0;
+    }
+    for i in 0..nn {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == -1 && (*nod.offset(i as isize)).type_ == STOP {
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            gc[fr] = is_gc(seq, (*nod.offset(i as isize)).ndx) as f64
+                + is_gc(seq, (*nod.offset(i as isize)).ndx - 1) as f64
+                + is_gc(seq, (*nod.offset(i as isize)).ndx - 2) as f64;
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            let mut j = last[fr] + 3;
+            while j <= (*nod.offset(i as isize)).ndx {
+                gc[fr] += is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64
+                    + is_gc(seq, j + 2) as f64;
+                j += 3;
+            }
+            gsize = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
+                as f64
+                + 3.0;
+            (*nod.offset(i as isize)).gc_cont = gc[fr] / gsize;
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+    }
+}
+
+/*******************************************************************************
+  Score each candidate's coding.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn raw_coding_score(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut last: [c_int; 3] = [0; 3];
+    let mut score: [f64; 3] = [0.0; 3];
+    let mut lfac: f64;
+    let mut no_stop: f64;
+    let mut gsize: f64;
+
+    if (*tinf).trans_table != 11 {
+        /* TGA or TAG is not a stop */
+        no_stop = ((1.0 - (*tinf).gc) * (1.0 - (*tinf).gc) * (*tinf).gc) / 8.0;
+        no_stop += ((1.0 - (*tinf).gc) * (1.0 - (*tinf).gc) * (1.0 - (*tinf).gc)) / 8.0;
+        no_stop = 1.0 - no_stop;
+    } else {
+        no_stop = ((1.0 - (*tinf).gc) * (1.0 - (*tinf).gc) * (*tinf).gc) / 4.0;
+        no_stop += ((1.0 - (*tinf).gc) * (1.0 - (*tinf).gc) * (1.0 - (*tinf).gc)) / 8.0;
+        no_stop = 1.0 - no_stop;
+    }
+
+    /* Initial Pass: Score coding potential (start->stop) */
+    for k in 0..3 {
+        score[k] = 0.0;
+    }
+    let mut i = nn - 1;
+    while i >= 0 {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == 1 && (*nod.offset(i as isize)).type_ == STOP {
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            score[fr] = 0.0;
+        } else if (*nod.offset(i as isize)).strand == 1 {
+            let mut j = last[fr] - 3;
+            while j >= (*nod.offset(i as isize)).ndx {
+                score[fr] += (*tinf).gene_dc[mer_ndx(6, seq, j) as usize];
+                j -= 3;
+            }
+            (*nod.offset(i as isize)).cscore = score[fr];
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+        i -= 1;
+    }
+    for k in 0..3 {
+        score[k] = 0.0;
+    }
+    for i in 0..nn {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == -1 && (*nod.offset(i as isize)).type_ == STOP {
+            last[fr] = (*nod.offset(i as isize)).ndx;
+            score[fr] = 0.0;
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            let mut j = last[fr] + 3;
+            while j <= (*nod.offset(i as isize)).ndx {
+                score[fr] += (*tinf).gene_dc[mer_ndx(6, rseq, slen - j - 1) as usize];
+                j += 3;
+            }
+            (*nod.offset(i as isize)).cscore = score[fr];
+            last[fr] = (*nod.offset(i as isize)).ndx;
+        }
+    }
+
+    /* Second Pass: Penalize start nodes with ascending coding to their left */
+    for k in 0..3 {
+        score[k] = -10000.0;
+    }
+    for i in 0..nn {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == 1 && (*nod.offset(i as isize)).type_ == STOP {
+            score[fr] = -10000.0;
+        } else if (*nod.offset(i as isize)).strand == 1 {
+            if (*nod.offset(i as isize)).cscore > score[fr] {
+                score[fr] = (*nod.offset(i as isize)).cscore;
+            } else {
+                (*nod.offset(i as isize)).cscore -= score[fr] - (*nod.offset(i as isize)).cscore;
+            }
+        }
+    }
+    for k in 0..3 {
+        score[k] = -10000.0;
+    }
+    i = nn - 1;
+    while i >= 0 {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == -1 && (*nod.offset(i as isize)).type_ == STOP {
+            score[fr] = -10000.0;
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            if (*nod.offset(i as isize)).cscore > score[fr] {
+                score[fr] = (*nod.offset(i as isize)).cscore;
+            } else {
+                (*nod.offset(i as isize)).cscore -= score[fr] - (*nod.offset(i as isize)).cscore;
+            }
+        }
+        i -= 1;
+    }
+
+    /* Third Pass: Add length-based factor to the score */
+    for i in 0..nn {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == 1 && (*nod.offset(i as isize)).type_ == STOP {
+            score[fr] = -10000.0;
+        } else if (*nod.offset(i as isize)).strand == 1 {
+            gsize = (((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
+                as f64
+                + 3.0)
+                / 3.0;
+            if gsize > 1000.0 {
+                lfac = ((1.0 - no_stop.powf(1000.0)) / no_stop.powf(1000.0)).ln();
+                lfac -= ((1.0 - no_stop.powf(80.0)) / no_stop.powf(80.0)).ln();
+                lfac *= (gsize - 80.0) / 920.0;
+            } else {
+                lfac = ((1.0 - no_stop.powf(gsize)) / no_stop.powf(gsize)).ln();
+                lfac -= ((1.0 - no_stop.powf(80.0)) / no_stop.powf(80.0)).ln();
+            }
+            if lfac > score[fr] {
+                score[fr] = lfac;
+            } else {
+                lfac -= dmax(dmin(score[fr] - lfac, lfac), 0.0);
+            }
+            if lfac > 3.0 && (*nod.offset(i as isize)).cscore < 0.5 * lfac {
+                (*nod.offset(i as isize)).cscore = 0.5 * lfac;
+            }
+            (*nod.offset(i as isize)).cscore += lfac;
+        }
+    }
+    i = nn - 1;
+    while i >= 0 {
+        let fr = ((*nod.offset(i as isize)).ndx % 3) as usize;
+        if (*nod.offset(i as isize)).strand == -1 && (*nod.offset(i as isize)).type_ == STOP {
+            score[fr] = -10000.0;
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            gsize = (((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
+                as f64
+                + 3.0)
+                / 3.0;
+            if gsize > 1000.0 {
+                lfac = ((1.0 - no_stop.powf(1000.0)) / no_stop.powf(1000.0)).ln();
+                lfac -= ((1.0 - no_stop.powf(80.0)) / no_stop.powf(80.0)).ln();
+                lfac *= (gsize - 80.0) / 920.0;
+            } else {
+                lfac = ((1.0 - no_stop.powf(gsize)) / no_stop.powf(gsize)).ln();
+                lfac -= ((1.0 - no_stop.powf(80.0)) / no_stop.powf(80.0)).ln();
+            }
+            if lfac > score[fr] {
+                score[fr] = lfac;
+            } else {
+                lfac -= dmax(dmin(score[fr] - lfac, lfac), 0.0);
+            }
+            if lfac > 3.0 && (*nod.offset(i as isize)).cscore < 0.5 * lfac {
+                (*nod.offset(i as isize)).cscore = 0.5 * lfac;
+            }
+            (*nod.offset(i as isize)).cscore += lfac;
+        }
+        i -= 1;
+    }
+}
+
+/*******************************************************************************
+  Examines the results of the SD motif search to determine if this organism
+  uses an SD motif or not.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn determine_sd_usage(tinf: *mut Training) {
+    (*tinf).uses_sd = 1;
+    if (*tinf).rbs_wt[0] >= 0.0 {
+        (*tinf).uses_sd = 0;
+    }
+    if (*tinf).rbs_wt[16] < 1.0
+        && (*tinf).rbs_wt[13] < 1.0
+        && (*tinf).rbs_wt[15] < 1.0
+        && ((*tinf).rbs_wt[0] >= -0.5
+            || ((*tinf).rbs_wt[22] < 2.0
+                && (*tinf).rbs_wt[24] < 2.0
+                && (*tinf).rbs_wt[27] < 2.0))
+    {
+        (*tinf).uses_sd = 0;
+    }
+}
+
+/*******************************************************************************
+  RBS Scoring Function: Calculate the RBS motif and then multiply it by the
+  appropriate weight for that motif.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn rbs_score(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut cur_sc: [c_int; 2];
+
+    /* Scan all starts looking for RBS's */
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ == STOP || (*nod.offset(i as isize)).edge == 1 {
+            continue;
+        }
+        (*nod.offset(i as isize)).rbs[0] = 0;
+        (*nod.offset(i as isize)).rbs[1] = 0;
+        if (*nod.offset(i as isize)).strand == 1 {
+            let mut j = (*nod.offset(i as isize)).ndx - 20;
+            while j <= (*nod.offset(i as isize)).ndx - 6 {
+                if j < 0 {
+                    j += 1;
+                    continue;
+                }
+                cur_sc = [0; 2];
+                cur_sc[0] = shine_dalgarno_exact(
+                    seq,
+                    j,
+                    (*nod.offset(i as isize)).ndx,
+                    (*tinf).rbs_wt.as_ptr(),
+                );
+                cur_sc[1] = shine_dalgarno_mm(
+                    seq,
+                    j,
+                    (*nod.offset(i as isize)).ndx,
+                    (*tinf).rbs_wt.as_ptr(),
+                );
+                if cur_sc[0] > (*nod.offset(i as isize)).rbs[0] {
+                    (*nod.offset(i as isize)).rbs[0] = cur_sc[0];
+                }
+                if cur_sc[1] > (*nod.offset(i as isize)).rbs[1] {
+                    (*nod.offset(i as isize)).rbs[1] = cur_sc[1];
+                }
+                j += 1;
+            }
+        } else if (*nod.offset(i as isize)).strand == -1 {
+            let mut j = slen - (*nod.offset(i as isize)).ndx - 21;
+            while j <= slen - (*nod.offset(i as isize)).ndx - 7 {
+                if j > slen - 1 {
+                    j += 1;
+                    continue;
+                }
+                cur_sc = [0; 2];
+                cur_sc[0] = shine_dalgarno_exact(
+                    rseq,
+                    j,
+                    slen - 1 - (*nod.offset(i as isize)).ndx,
+                    (*tinf).rbs_wt.as_ptr(),
+                );
+                cur_sc[1] = shine_dalgarno_mm(
+                    rseq,
+                    j,
+                    slen - 1 - (*nod.offset(i as isize)).ndx,
+                    (*tinf).rbs_wt.as_ptr(),
+                );
+                if cur_sc[0] > (*nod.offset(i as isize)).rbs[0] {
+                    (*nod.offset(i as isize)).rbs[0] = cur_sc[0];
+                }
+                if cur_sc[1] > (*nod.offset(i as isize)).rbs[1] {
+                    (*nod.offset(i as isize)).rbs[1] = cur_sc[1];
+                }
+                j += 1;
+            }
+        }
+    }
+}
+
+/*******************************************************************************
+  Iterative Algorithm to train starts (Shine-Dalgarno motifs only).
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn train_starts_sd(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut fr: c_int;
+    let mut rbs: [c_int; 3] = [0; 3];
+    let mut type_: [c_int; 3] = [0; 3];
+    let mut bndx: [c_int; 3] = [0; 3];
+    let mut max_rb: c_int;
+    let mut sum: f64;
+    let wt: f64 = (*tinf).st_wt;
+    let mut rbg: [f64; 28] = [0.0; 28];
+    let mut rreal: [f64; 28] = [0.0; 28];
+    let mut best: [f64; 3] = [0.0; 3];
+    let mut sthresh: f64 = 35.0;
+    let mut tbg: [f64; 3] = [0.0; 3];
+    let mut treal: [f64; 3] = [0.0; 3];
+
+    for j in 0..3 {
+        (*tinf).type_wt[j] = 0.0;
+    }
+    for j in 0..28 {
+        (*tinf).rbs_wt[j] = 0.0;
+    }
+    for i in 0..32 {
+        for j in 0..4 {
+            (*tinf).ups_comp[i][j] = 0.0;
+        }
+    }
+
+    /* Build the background of random types */
+    for i in 0..3 {
+        tbg[i] = 0.0;
+    }
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ == STOP {
+            continue;
+        }
+        tbg[(*nod.offset(i as isize)).type_ as usize] += 1.0;
+    }
+    sum = 0.0;
+    for i in 0..3 {
+        sum += tbg[i];
+    }
+    for i in 0..3 {
+        tbg[i] /= sum;
+    }
+
+    /* Iterate 10 times through the list of nodes */
+    for i in 0..10 {
+        /* Recalculate the RBS motif background */
+        for j in 0..28 {
+            rbg[j] = 0.0;
+        }
+        for j in 0..nn {
+            if (*nod.offset(j as isize)).type_ == STOP || (*nod.offset(j as isize)).edge == 1 {
+                continue;
+            }
+            if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                > (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] + 1.0
+                || (*nod.offset(j as isize)).rbs[1] == 0
+            {
+                max_rb = (*nod.offset(j as isize)).rbs[0];
+            } else if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                < (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] - 1.0
+                || (*nod.offset(j as isize)).rbs[0] == 0
+            {
+                max_rb = (*nod.offset(j as isize)).rbs[1];
+            } else {
+                max_rb = dmax(
+                    (*nod.offset(j as isize)).rbs[0] as f64,
+                    (*nod.offset(j as isize)).rbs[1] as f64,
+                ) as c_int;
+            }
+            rbg[max_rb as usize] += 1.0;
+        }
+        sum = 0.0;
+        for j in 0..28 {
+            sum += rbg[j];
+        }
+        for j in 0..28 {
+            rbg[j] /= sum;
+        }
+
+        for j in 0..28 {
+            rreal[j] = 0.0;
+        }
+        for j in 0..3 {
+            treal[j] = 0.0;
+        }
+
+        /* Forward strand pass */
+        for j in 0..3 {
+            best[j] = 0.0;
+            bndx[j] = -1;
+            rbs[j] = 0;
+            type_[j] = 0;
+        }
+        for j in 0..nn {
+            if (*nod.offset(j as isize)).type_ != STOP && (*nod.offset(j as isize)).edge == 1 {
+                continue;
+            }
+            fr = (*nod.offset(j as isize)).ndx % 3;
+            if (*nod.offset(j as isize)).type_ == STOP && (*nod.offset(j as isize)).strand == 1 {
+                if best[fr as usize] >= sthresh
+                    && (*nod.offset(bndx[fr as usize] as isize)).ndx % 3 == fr
+                {
+                    rreal[rbs[fr as usize] as usize] += 1.0;
+                    treal[type_[fr as usize] as usize] += 1.0;
+                    if i == 9 {
+                        count_upstream_composition(
+                            seq,
+                            slen,
+                            1,
+                            (*nod.offset(bndx[fr as usize] as isize)).ndx,
+                            tinf,
+                        );
+                    }
+                }
+                best[fr as usize] = 0.0;
+                bndx[fr as usize] = -1;
+                rbs[fr as usize] = 0;
+                type_[fr as usize] = 0;
+            } else if (*nod.offset(j as isize)).strand == 1 {
+                if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                    > (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] + 1.0
+                    || (*nod.offset(j as isize)).rbs[1] == 0
+                {
+                    max_rb = (*nod.offset(j as isize)).rbs[0];
+                } else if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                    < (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] - 1.0
+                    || (*nod.offset(j as isize)).rbs[0] == 0
+                {
+                    max_rb = (*nod.offset(j as isize)).rbs[1];
+                } else {
+                    max_rb = dmax(
+                        (*nod.offset(j as isize)).rbs[0] as f64,
+                        (*nod.offset(j as isize)).rbs[1] as f64,
+                    ) as c_int;
+                }
+                if (*nod.offset(j as isize)).cscore
+                    + wt * (*tinf).rbs_wt[max_rb as usize]
+                    + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
+                    >= best[fr as usize]
+                {
+                    best[fr as usize] = (*nod.offset(j as isize)).cscore
+                        + wt * (*tinf).rbs_wt[max_rb as usize];
+                    best[fr as usize] +=
+                        wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
+                    bndx[fr as usize] = j;
+                    type_[fr as usize] = (*nod.offset(j as isize)).type_;
+                    rbs[fr as usize] = max_rb;
+                }
+            }
+        }
+
+        /* Reverse strand pass */
+        for j in 0..3 {
+            best[j] = 0.0;
+            bndx[j] = -1;
+            rbs[j] = 0;
+            type_[j] = 0;
+        }
+        let mut j = nn - 1;
+        while j >= 0 {
+            if (*nod.offset(j as isize)).type_ != STOP && (*nod.offset(j as isize)).edge == 1 {
+                j -= 1;
+                continue;
+            }
+            fr = (*nod.offset(j as isize)).ndx % 3;
+            if (*nod.offset(j as isize)).type_ == STOP && (*nod.offset(j as isize)).strand == -1 {
+                if best[fr as usize] >= sthresh
+                    && (*nod.offset(bndx[fr as usize] as isize)).ndx % 3 == fr
+                {
+                    rreal[rbs[fr as usize] as usize] += 1.0;
+                    treal[type_[fr as usize] as usize] += 1.0;
+                    if i == 9 {
+                        count_upstream_composition(
+                            rseq,
+                            slen,
+                            -1,
+                            (*nod.offset(bndx[fr as usize] as isize)).ndx,
+                            tinf,
+                        );
+                    }
+                }
+                best[fr as usize] = 0.0;
+                bndx[fr as usize] = -1;
+                rbs[fr as usize] = 0;
+                type_[fr as usize] = 0;
+            } else if (*nod.offset(j as isize)).strand == -1 {
+                if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                    > (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] + 1.0
+                    || (*nod.offset(j as isize)).rbs[1] == 0
+                {
+                    max_rb = (*nod.offset(j as isize)).rbs[0];
+                } else if (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[0] as usize]
+                    < (*tinf).rbs_wt[(*nod.offset(j as isize)).rbs[1] as usize] - 1.0
+                    || (*nod.offset(j as isize)).rbs[0] == 0
+                {
+                    max_rb = (*nod.offset(j as isize)).rbs[1];
+                } else {
+                    max_rb = dmax(
+                        (*nod.offset(j as isize)).rbs[0] as f64,
+                        (*nod.offset(j as isize)).rbs[1] as f64,
+                    ) as c_int;
+                }
+                if (*nod.offset(j as isize)).cscore
+                    + wt * (*tinf).rbs_wt[max_rb as usize]
+                    + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
+                    >= best[fr as usize]
+                {
+                    best[fr as usize] = (*nod.offset(j as isize)).cscore
+                        + wt * (*tinf).rbs_wt[max_rb as usize];
+                    best[fr as usize] +=
+                        wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
+                    bndx[fr as usize] = j;
+                    type_[fr as usize] = (*nod.offset(j as isize)).type_;
+                    rbs[fr as usize] = max_rb;
+                }
+            }
+            j -= 1;
+        }
+
+        sum = 0.0;
+        for j in 0..28 {
+            sum += rreal[j];
+        }
+        if sum == 0.0 {
+            for j in 0..28 {
+                (*tinf).rbs_wt[j] = 0.0;
+            }
+        } else {
+            for j in 0..28 {
+                rreal[j] /= sum;
+                if rbg[j] != 0.0 {
+                    (*tinf).rbs_wt[j] = (rreal[j] / rbg[j]).ln();
+                } else {
+                    (*tinf).rbs_wt[j] = -4.0;
+                }
+                if (*tinf).rbs_wt[j] > 4.0 {
+                    (*tinf).rbs_wt[j] = 4.0;
+                }
+                if (*tinf).rbs_wt[j] < -4.0 {
+                    (*tinf).rbs_wt[j] = -4.0;
+                }
+            }
+        }
+        sum = 0.0;
+        for j in 0..3 {
+            sum += treal[j];
+        }
+        if sum == 0.0 {
+            for j in 0..3 {
+                (*tinf).type_wt[j] = 0.0;
+            }
+        } else {
+            for j in 0..3 {
+                treal[j] /= sum;
+                if tbg[j] != 0.0 {
+                    (*tinf).type_wt[j] = (treal[j] / tbg[j]).ln();
+                } else {
+                    (*tinf).type_wt[j] = -4.0;
+                }
+                if (*tinf).type_wt[j] > 4.0 {
+                    (*tinf).type_wt[j] = 4.0;
+                }
+                if (*tinf).type_wt[j] < -4.0 {
+                    (*tinf).type_wt[j] = -4.0;
+                }
+            }
+        }
+        if sum <= nn as f64 / 2000.0 {
+            sthresh /= 2.0;
+        }
+    }
+
+    /* Convert upstream base composition to a log score */
+    for i in 0..32 {
+        sum = 0.0;
+        for j in 0..4 {
+            sum += (*tinf).ups_comp[i][j];
+        }
+        if sum == 0.0 {
+            for j in 0..4 {
+                (*tinf).ups_comp[i][j] = 0.0;
+            }
+        } else {
+            for j in 0..4 {
+                (*tinf).ups_comp[i][j] /= sum;
+                if (*tinf).gc > 0.1 && (*tinf).gc < 0.9 {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / (1.0 - (*tinf).gc)).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
+                    }
+                } else if (*tinf).gc <= 0.1 {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                    }
+                } else {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                    }
+                }
+                if (*tinf).ups_comp[i][j] > 4.0 {
+                    (*tinf).ups_comp[i][j] = 4.0;
+                }
+                if (*tinf).ups_comp[i][j] < -4.0 {
+                    (*tinf).ups_comp[i][j] = -4.0;
+                }
+            }
+        }
+    }
+}
+
+/*******************************************************************************
+  Iterative Algorithm to train starts (non-SD version).
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn train_starts_nonsd(
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+) {
+    let mut fr: c_int;
+    let mut bndx: [c_int; 3] = [0; 3];
+    let mut mgood: [[[c_int; 4096]; 4]; 4] = [[[0; 4096]; 4]; 4];
+    let mut stage: c_int;
+    let mut sum: f64;
+    let mut ngenes: f64;
+    let wt: f64 = (*tinf).st_wt;
+    let mut best: [f64; 3] = [0.0; 3];
+    let mut sthresh: f64 = 35.0;
+    let mut tbg: [f64; 3] = [0.0; 3];
+    let mut treal: [f64; 3] = [0.0; 3];
+    let mut mbg: [[[f64; 4096]; 4]; 4] = [[[0.0; 4096]; 4]; 4];
+    let mut mreal: [[[f64; 4096]; 4]; 4] = [[[0.0; 4096]; 4]; 4];
+    let mut zbg: f64;
+    let mut zreal: f64;
+
+    for i in 0..32 {
+        for j in 0..4 {
+            (*tinf).ups_comp[i][j] = 0.0;
+        }
+    }
+
+    /* Build the background of random types */
+    for i in 0..3 {
+        (*tinf).type_wt[i] = 0.0;
+    }
+    for i in 0..3 {
+        tbg[i] = 0.0;
+    }
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ == STOP {
+            continue;
+        }
+        tbg[(*nod.offset(i as isize)).type_ as usize] += 1.0;
+    }
+    sum = 0.0;
+    for i in 0..3 {
+        sum += tbg[i];
+    }
+    for i in 0..3 {
+        tbg[i] /= sum;
+    }
+
+    /* Iterate 20 times through the list of nodes */
+    for i in 0..20 {
+        /* Determine which stage of motif finding we're in */
+        if i < 4 {
+            stage = 0;
+        } else if i < 12 {
+            stage = 1;
+        } else {
+            stage = 2;
+        }
+
+        /* Recalculate the upstream motif background and set 'real' counts to 0 */
+        for j in 0..4 {
+            for k in 0..4 {
+                for l in 0..4096 {
+                    mbg[j][k][l] = 0.0;
+                }
+            }
+        }
+        zbg = 0.0;
+        for j in 0..nn {
+            if (*nod.offset(j as isize)).type_ == STOP || (*nod.offset(j as isize)).edge == 1 {
+                continue;
+            }
+            find_best_upstream_motif(tinf, seq, rseq, slen, &mut *nod.offset(j as isize), stage);
+            update_motif_counts(
+                mbg.as_mut_ptr() as *mut [[f64; 4096]; 4],
+                &mut zbg,
+                seq,
+                rseq,
+                slen,
+                &mut *nod.offset(j as isize),
+                stage,
+            );
+        }
+        sum = 0.0;
+        for j in 0..4 {
+            for k in 0..4 {
+                for l in 0..4096 {
+                    sum += mbg[j][k][l];
+                }
+            }
+        }
+        sum += zbg;
+        for j in 0..4 {
+            for k in 0..4 {
+                for l in 0..4096 {
+                    mbg[j][k][l] /= sum;
+                }
+            }
+        }
+        zbg /= sum;
+
+        /* Reset counts of 'real' motifs/types to 0 */
+        for j in 0..4 {
+            for k in 0..4 {
+                for l in 0..4096 {
+                    mreal[j][k][l] = 0.0;
+                }
+            }
+        }
+        zreal = 0.0;
+        for j in 0..3 {
+            treal[j] = 0.0;
+        }
+        ngenes = 0.0;
+
+        /* Forward strand pass */
+        for j in 0..3 {
+            best[j] = 0.0;
+            bndx[j] = -1;
+        }
+        for j in 0..nn {
+            if (*nod.offset(j as isize)).type_ != STOP && (*nod.offset(j as isize)).edge == 1 {
+                continue;
+            }
+            fr = (*nod.offset(j as isize)).ndx % 3;
+            if (*nod.offset(j as isize)).type_ == STOP && (*nod.offset(j as isize)).strand == 1 {
+                if best[fr as usize] >= sthresh {
+                    ngenes += 1.0;
+                    treal[(*nod.offset(bndx[fr as usize] as isize)).type_ as usize] += 1.0;
+                    update_motif_counts(
+                        mreal.as_mut_ptr() as *mut [[f64; 4096]; 4],
+                        &mut zreal,
+                        seq,
+                        rseq,
+                        slen,
+                        &mut *nod.offset(bndx[fr as usize] as isize),
+                        stage,
+                    );
+                    if i == 19 {
+                        count_upstream_composition(
+                            seq,
+                            slen,
+                            1,
+                            (*nod.offset(bndx[fr as usize] as isize)).ndx,
+                            tinf,
+                        );
+                    }
+                }
+                best[fr as usize] = 0.0;
+                bndx[fr as usize] = -1;
+            } else if (*nod.offset(j as isize)).strand == 1 {
+                if (*nod.offset(j as isize)).cscore
+                    + wt * (*nod.offset(j as isize)).mot.score
+                    + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
+                    >= best[fr as usize]
+                {
+                    best[fr as usize] = (*nod.offset(j as isize)).cscore
+                        + wt * (*nod.offset(j as isize)).mot.score;
+                    best[fr as usize] +=
+                        wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
+                    bndx[fr as usize] = j;
+                }
+            }
+        }
+
+        /* Reverse strand pass */
+        for j in 0..3 {
+            best[j] = 0.0;
+            bndx[j] = -1;
+        }
+        let mut j = nn - 1;
+        while j >= 0 {
+            if (*nod.offset(j as isize)).type_ != STOP && (*nod.offset(j as isize)).edge == 1 {
+                j -= 1;
+                continue;
+            }
+            fr = (*nod.offset(j as isize)).ndx % 3;
+            if (*nod.offset(j as isize)).type_ == STOP && (*nod.offset(j as isize)).strand == -1 {
+                if best[fr as usize] >= sthresh {
+                    ngenes += 1.0;
+                    treal[(*nod.offset(bndx[fr as usize] as isize)).type_ as usize] += 1.0;
+                    update_motif_counts(
+                        mreal.as_mut_ptr() as *mut [[f64; 4096]; 4],
+                        &mut zreal,
+                        seq,
+                        rseq,
+                        slen,
+                        &mut *nod.offset(bndx[fr as usize] as isize),
+                        stage,
+                    );
+                    if i == 19 {
+                        count_upstream_composition(
+                            rseq,
+                            slen,
+                            -1,
+                            (*nod.offset(bndx[fr as usize] as isize)).ndx,
+                            tinf,
+                        );
+                    }
+                }
+                best[fr as usize] = 0.0;
+                bndx[fr as usize] = -1;
+            } else if (*nod.offset(j as isize)).strand == -1 {
+                if (*nod.offset(j as isize)).cscore
+                    + wt * (*nod.offset(j as isize)).mot.score
+                    + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
+                    >= best[fr as usize]
+                {
+                    best[fr as usize] = (*nod.offset(j as isize)).cscore
+                        + wt * (*nod.offset(j as isize)).mot.score;
+                    best[fr as usize] +=
+                        wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
+                    bndx[fr as usize] = j;
+                }
+            }
+            j -= 1;
+        }
+
+        /* Update the log likelihood weights for type and RBS motifs */
+        if stage < 2 {
+            build_coverage_map(
+                mreal.as_mut_ptr() as *mut [[f64; 4096]; 4],
+                mgood.as_mut_ptr() as *mut [[c_int; 4096]; 4],
+                ngenes,
+                stage,
+            );
+        }
+        sum = 0.0;
+        for j in 0..4 {
+            for k in 0..4 {
+                for l in 0..4096 {
+                    sum += mreal[j][k][l];
+                }
+            }
+        }
+        sum += zreal;
+        if sum == 0.0 {
+            for j in 0..4 {
+                for k in 0..4 {
+                    for l in 0..4096 {
+                        (*tinf).mot_wt[j][k][l] = 0.0;
+                    }
+                }
+            }
+            (*tinf).no_mot = 0.0;
+        } else {
+            for j in 0..4usize {
+                for k in 0..4usize {
+                    for l in 0..4096usize {
+                        if mgood[j][k][l] == 0 {
+                            zreal += mreal[j][k][l];
+                            zbg += mreal[j][k][l];
+                            mreal[j][k][l] = 0.0;
+                            mbg[j][k][l] = 0.0;
+                        }
+                        mreal[j][k][l] /= sum;
+                        if mbg[j][k][l] != 0.0 {
+                            (*tinf).mot_wt[j][k][l] = (mreal[j][k][l] / mbg[j][k][l]).ln();
+                        } else {
+                            (*tinf).mot_wt[j][k][l] = -4.0;
+                        }
+                        if (*tinf).mot_wt[j][k][l] > 4.0 {
+                            (*tinf).mot_wt[j][k][l] = 4.0;
+                        }
+                        if (*tinf).mot_wt[j][k][l] < -4.0 {
+                            (*tinf).mot_wt[j][k][l] = -4.0;
+                        }
+                    }
+                }
+            }
+        }
+        zreal /= sum;
+        if zbg != 0.0 {
+            (*tinf).no_mot = (zreal / zbg).ln();
+        } else {
+            (*tinf).no_mot = -4.0;
+        }
+        if (*tinf).no_mot > 4.0 {
+            (*tinf).no_mot = 4.0;
+        }
+        if (*tinf).no_mot < -4.0 {
+            (*tinf).no_mot = -4.0;
+        }
+        sum = 0.0;
+        for j in 0..3 {
+            sum += treal[j];
+        }
+        if sum == 0.0 {
+            for j in 0..3 {
+                (*tinf).type_wt[j] = 0.0;
+            }
+        } else {
+            for j in 0..3 {
+                treal[j] /= sum;
+                if tbg[j] != 0.0 {
+                    (*tinf).type_wt[j] = (treal[j] / tbg[j]).ln();
+                } else {
+                    (*tinf).type_wt[j] = -4.0;
+                }
+                if (*tinf).type_wt[j] > 4.0 {
+                    (*tinf).type_wt[j] = 4.0;
+                }
+                if (*tinf).type_wt[j] < -4.0 {
+                    (*tinf).type_wt[j] = -4.0;
+                }
+            }
+        }
+        if sum <= nn as f64 / 2000.0 {
+            sthresh /= 2.0;
+        }
+    }
+
+    /* Convert upstream base composition to a log score */
+    for i in 0..32 {
+        sum = 0.0;
+        for j in 0..4 {
+            sum += (*tinf).ups_comp[i][j];
+        }
+        if sum == 0.0 {
+            for j in 0..4 {
+                (*tinf).ups_comp[i][j] = 0.0;
+            }
+        } else {
+            for j in 0..4 {
+                (*tinf).ups_comp[i][j] /= sum;
+                if (*tinf).gc > 0.1 && (*tinf).gc < 0.9 {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / (1.0 - (*tinf).gc)).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
+                    }
+                } else if (*tinf).gc <= 0.1 {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                    }
+                } else {
+                    if j == 0 || j == 3 {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                    } else {
+                        (*tinf).ups_comp[i][j] =
+                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                    }
+                }
+                if (*tinf).ups_comp[i][j] > 4.0 {
+                    (*tinf).ups_comp[i][j] = 4.0;
+                }
+                if (*tinf).ups_comp[i][j] < -4.0 {
+                    (*tinf).ups_comp[i][j] = -4.0;
+                }
+            }
+        }
+    }
+}
+
+/*******************************************************************************
+  For a given start, record the base composition of the upstream region.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn count_upstream_composition(
+    seq: *mut u8,
+    slen: c_int,
+    strand: c_int,
+    pos: c_int,
+    tinf: *mut Training,
+) {
+    let mut count: usize = 0;
+    let start: c_int;
+    if strand == 1 {
+        start = pos;
+    } else {
+        start = slen - 1 - pos;
+    }
+
+    for i in 1..45 {
+        if i > 2 && i < 15 {
+            continue;
+        }
+        if start - i >= 0 {
+            (*tinf).ups_comp[count][mer_ndx(1, seq, start - i) as usize] += 1.0;
+        }
+        count += 1;
+    }
+}
+
+/*******************************************************************************
+  For a given start, score the base composition of the upstream region.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn score_upstream_composition(
+    seq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    tinf: *mut Training,
+) {
+    let mut count: usize = 0;
+    let start: c_int;
+    if (*nod).strand == 1 {
+        start = (*nod).ndx;
+    } else {
+        start = slen - 1 - (*nod).ndx;
+    }
+
+    (*nod).uscore = 0.0;
+    for i in 1..45 {
+        if i > 2 && i < 15 {
+            continue;
+        }
+        if start - i < 0 {
+            count += 1;
+            continue;
+        }
+        (*nod).uscore +=
+            0.4 * (*tinf).st_wt * (*tinf).ups_comp[count][mer_ndx(1, seq, start - i) as usize];
+        count += 1;
+    }
+}
+
+/*******************************************************************************
+  Given the weights for various motifs/distances from the training file,
+  return the highest scoring mer/spacer combination.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn find_best_upstream_motif(
+    tinf: *mut Training,
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    stage: c_int,
+) {
+    let mut start: c_int;
+    let mut spacer: c_int;
+    let mut spacendx: c_int;
+    let mut index: c_int;
+    let mut max_spacer: c_int = 0;
+    let mut max_spacendx: c_int = 0;
+    let mut max_len: c_int = 0;
+    let mut max_ndx: c_int = 0;
+    let mut max_sc: f64 = -100.0;
+    let mut score: f64;
+    let wseq: *const u8;
+
+    if (*nod).type_ == STOP || (*nod).edge == 1 {
+        return;
+    }
+    if (*nod).strand == 1 {
+        wseq = seq;
+        start = (*nod).ndx;
+    } else {
+        wseq = rseq;
+        start = slen - 1 - (*nod).ndx;
+    }
+
+    let mut i: c_int = 3;
+    while i >= 0 {
+        let mut j = start - 18 - i;
+        while j <= start - 6 - i {
+            if j < 0 {
+                j += 1;
+                continue;
+            }
+            spacer = start - j - i - 3;
+            if j <= start - 16 - i {
+                spacendx = 3;
+            } else if j <= start - 14 - i {
+                spacendx = 2;
+            } else if j >= start - 7 - i {
+                spacendx = 1;
+            } else {
+                spacendx = 0;
+            }
+            index = mer_ndx(i + 3, wseq, j);
+            score = (*tinf).mot_wt[i as usize][spacendx as usize][index as usize];
+            if score > max_sc {
+                max_sc = score;
+                max_spacendx = spacendx;
+                max_spacer = spacer;
+                max_ndx = index;
+                max_len = i + 3;
+            }
+            j += 1;
+        }
+        i -= 1;
+    }
+
+    if stage == 2 && (max_sc == -4.0 || max_sc < (*tinf).no_mot + 0.69) {
+        (*nod).mot.ndx = 0;
+        (*nod).mot.len = 0;
+        (*nod).mot.spacendx = 0;
+        (*nod).mot.spacer = 0;
+        (*nod).mot.score = (*tinf).no_mot;
+    } else {
+        (*nod).mot.ndx = max_ndx;
+        (*nod).mot.len = max_len;
+        (*nod).mot.spacendx = max_spacendx;
+        (*nod).mot.spacer = max_spacer;
+        (*nod).mot.score = max_sc;
+    }
+}
+
+/*******************************************************************************
+  Update the motif counts from a putative "real" start.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn update_motif_counts(
+    mcnt: *mut [[f64; 4096]; 4],
+    zero: *mut f64,
+    seq: *mut u8,
+    rseq: *mut u8,
+    slen: c_int,
+    nod: *mut Node,
+    stage: c_int,
+) {
+    let mut start: c_int;
+    let mut spacendx: c_int;
+    let wseq: *const u8;
+    let mot: *const Motif = &(*nod).mot;
+
+    if (*nod).type_ == STOP || (*nod).edge == 1 {
+        return;
+    }
+    if (*mot).len == 0 {
+        *zero += 1.0;
+        return;
+    }
+
+    if (*nod).strand == 1 {
+        wseq = seq;
+        start = (*nod).ndx;
+    } else {
+        wseq = rseq;
+        start = slen - 1 - (*nod).ndx;
+    }
+
+    /* Stage 0: Count all motifs. */
+    if stage == 0 {
+        let mut i: c_int = 3;
+        while i >= 0 {
+            let mut j = start - 18 - i;
+            while j <= start - 6 - i {
+                if j < 0 {
+                    j += 1;
+                    continue;
+                }
+                if j <= start - 16 - i {
+                    spacendx = 3;
+                } else if j <= start - 14 - i {
+                    spacendx = 2;
+                } else if j >= start - 7 - i {
+                    spacendx = 1;
+                } else {
+                    spacendx = 0;
+                }
+                let ndx = mer_ndx(i + 3, wseq, j);
+                for k in 0..4 {
+                    (*mcnt.offset(i as isize))[k][ndx as usize] += 1.0;
+                }
+                j += 1;
+            }
+            i -= 1;
+        }
+    }
+    /* Stage 1: Count only the best motif, but also count all its sub-motifs. */
+    else if stage == 1 {
+        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize]
+            [(*mot).ndx as usize] += 1.0;
+        let mut i: c_int = 0;
+        while i < (*mot).len - 3 {
+            let mut j = start - (*mot).spacer - (*mot).len;
+            while j <= start - (*mot).spacer - (i + 3) {
+                if j < 0 {
+                    j += 1;
+                    continue;
+                }
+                if j <= start - 16 - i {
+                    spacendx = 3;
+                } else if j <= start - 14 - i {
+                    spacendx = 2;
+                } else if j >= start - 7 - i {
+                    spacendx = 1;
+                } else {
+                    spacendx = 0;
+                }
+                let ndx = mer_ndx(i + 3, wseq, j);
+                (*mcnt.offset(i as isize))[spacendx as usize][ndx as usize] += 1.0;
+                j += 1;
+            }
+            i += 1;
+        }
+    }
+    /* Stage 2: Only count the highest scoring motif. */
+    else if stage == 2 {
+        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize]
+            [(*mot).ndx as usize] += 1.0;
+    }
+}
+
+/*******************************************************************************
+  Build coverage map for motifs.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn build_coverage_map(
+    real: *mut [[f64; 4096]; 4],
+    good: *mut [[c_int; 4096]; 4],
+    ng: f64,
+    _stage: c_int,
+) {
+    let mut decomp: [c_int; 3] = [0; 3];
+    let thresh: f64 = 0.2;
+
+    for i in 0..4 {
+        for j in 0..4 {
+            for k in 0..4096 {
+                (*good.offset(i as isize))[j][k] = 0;
+            }
+        }
+    }
+
+    /* 3-base motifs */
+    for i in 0..4 {
+        for j in 0..64 {
+            if (*real.offset(0))[i][j] / ng >= thresh {
+                for k in 0..4 {
+                    (*good.offset(0))[k][j] = 1;
+                }
+            }
+        }
+    }
+
+    /* 4-base motifs, must contain two valid 3-base motifs */
+    for i in 0..4 {
+        for j in 0..256 {
+            decomp[0] = ((j & 252) >> 2) as c_int;
+            decomp[1] = (j & 63) as c_int;
+            if (*good.offset(0))[i][decomp[0] as usize] == 0
+                || (*good.offset(0))[i][decomp[1] as usize] == 0
+            {
+                continue;
+            }
+            (*good.offset(1))[i][j] = 1;
+        }
+    }
+
+    /* 5-base motifs */
+    for i in 0..4 {
+        for j in 0..1024 {
+            decomp[0] = ((j & 1008) >> 4) as c_int;
+            decomp[1] = ((j & 252) >> 2) as c_int;
+            decomp[2] = (j & 63) as c_int;
+            if (*good.offset(0))[i][decomp[0] as usize] == 0
+                || (*good.offset(0))[i][decomp[1] as usize] == 0
+                || (*good.offset(0))[i][decomp[2] as usize] == 0
+            {
+                continue;
+            }
+            (*good.offset(2))[i][j] = 1;
+            let mut tmp = j as c_int;
+            let mut k: c_int = 0;
+            while k <= 16 {
+                tmp = tmp ^ k;
+                let mut l: c_int = 0;
+                while l <= 32 {
+                    tmp = tmp ^ l;
+                    if (*good.offset(2))[i][tmp as usize] == 0 {
+                        (*good.offset(2))[i][tmp as usize] = 2;
+                    }
+                    l += 32;
+                }
+                k += 16;
+            }
+        }
+    }
+
+    /* 6-base motifs, must contain two valid 5-base motifs */
+    for i in 0..4 {
+        for j in 0..4096 {
+            decomp[0] = ((j & 4092) >> 2) as c_int;
+            decomp[1] = (j & 1023) as c_int;
+            if (*good.offset(2))[i][decomp[0] as usize] == 0
+                || (*good.offset(2))[i][decomp[1] as usize] == 0
+            {
+                continue;
+            }
+            if (*good.offset(2))[i][decomp[0] as usize] == 1
+                && (*good.offset(2))[i][decomp[1] as usize] == 1
+            {
+                (*good.offset(3))[i][j] = 1;
+            } else {
+                (*good.offset(3))[i][j] = 2;
+            }
+        }
+    }
+}
+
+/*******************************************************************************
+  Intergenic modifier for connecting two genes.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn intergenic_mod(
+    n1: *mut Node,
+    n2: *mut Node,
+    tinf: *mut Training,
+) -> f64 {
+    let mut rval: f64 = 0.0;
+    let mut ovlp: f64 = 0.0;
+
+    if ((*n1).strand == 1
+        && (*n2).strand == 1
+        && ((*n1).ndx + 2 == (*n2).ndx || (*n1).ndx - 1 == (*n2).ndx))
+        || ((*n1).strand == -1
+            && (*n2).strand == -1
+            && ((*n1).ndx + 2 == (*n2).ndx || (*n1).ndx - 1 == (*n2).ndx))
+    {
+        if (*n1).strand == 1 && (*n2).rscore < 0.0 {
+            rval -= (*n2).rscore;
+        }
+        if (*n1).strand == -1 && (*n1).rscore < 0.0 {
+            rval -= (*n1).rscore;
+        }
+        if (*n1).strand == 1 && (*n2).uscore < 0.0 {
+            rval -= (*n2).uscore;
+        }
+        if (*n1).strand == -1 && (*n1).uscore < 0.0 {
+            rval -= (*n1).uscore;
+        }
+    }
+    let dist = ((*n1).ndx - (*n2).ndx).abs();
+    if (*n1).strand == 1 && (*n2).strand == 1 && (*n1).ndx + 2 >= (*n2).ndx {
+        ovlp = 1.0;
+    } else if (*n1).strand == -1 && (*n2).strand == -1 && (*n1).ndx >= (*n2).ndx + 2 {
+        ovlp = 1.0;
+    }
+    if dist > 3 * OPER_DIST || (*n1).strand != (*n2).strand {
+        rval -= 0.15 * (*tinf).st_wt;
+    } else if (dist <= OPER_DIST && ovlp == 0.0) || (dist as f64) < 0.25 * OPER_DIST as f64 {
+        rval += (2.0 - dist as f64 / OPER_DIST as f64) * 0.15 * (*tinf).st_wt;
+    }
+    rval
+}
+
+/*******************************************************************************
+  Write detailed scoring information about every single possible gene.
+*******************************************************************************/
+
+#[no_mangle]
+pub unsafe extern "C" fn write_start_file(
+    fh: *mut libc::FILE,
+    nod: *mut Node,
+    nn: c_int,
+    tinf: *mut Training,
+    sctr: c_int,
+    slen: c_int,
+    is_meta: c_int,
+    mdesc: *mut c_char,
+    version: *mut c_char,
+    header: *mut c_char,
+) {
+    let mut prev_stop: c_int = -1;
+    let mut prev_strand: c_int = 0;
+    let mut st_type: c_int;
+    let mut rbs1: f64;
+    let mut rbs2: f64;
+
+    static SD_STRING: [&[u8]; 28] = [
+        b"None\0",
+        b"GGA/GAG/AGG\0",
+        b"3Base/5BMM\0",
+        b"4Base/6BMM\0",
+        b"AGxAG\0",
+        b"AGxAG\0",
+        b"GGA/GAG/AGG\0",
+        b"GGxGG\0",
+        b"GGxGG\0",
+        b"AGxAG\0",
+        b"AGGAG(G)/GGAGG\0",
+        b"AGGA/GGAG/GAGG\0",
+        b"AGGA/GGAG/GAGG\0",
+        b"GGA/GAG/AGG\0",
+        b"GGxGG\0",
+        b"AGGA\0",
+        b"GGAG/GAGG\0",
+        b"AGxAGG/AGGxGG\0",
+        b"AGxAGG/AGGxGG\0",
+        b"AGxAGG/AGGxGG\0",
+        b"AGGAG/GGAGG\0",
+        b"AGGAG\0",
+        b"AGGAG\0",
+        b"GGAGG\0",
+        b"GGAGG\0",
+        b"AGGAGG\0",
+        b"AGGAGG\0",
+        b"AGGAGG\0",
+    ];
+    static SD_SPACER: [&[u8]; 28] = [
+        b"None\0",
+        b"3-4bp\0",
+        b"13-15bp\0",
+        b"13-15bp\0",
+        b"11-12bp\0",
+        b"3-4bp\0",
+        b"11-12bp\0",
+        b"11-12bp\0",
+        b"3-4bp\0",
+        b"5-10bp\0",
+        b"13-15bp\0",
+        b"3-4bp\0",
+        b"11-12bp\0",
+        b"5-10bp\0",
+        b"5-10bp\0",
+        b"5-10bp\0",
+        b"5-10bp\0",
+        b"11-12bp\0",
+        b"3-4bp\0",
+        b"5-10bp\0",
+        b"11-12bp\0",
+        b"3-4bp\0",
+        b"5-10bp\0",
+        b"3-4bp\0",
+        b"5-10bp\0",
+        b"11-12bp\0",
+        b"3-4bp\0",
+        b"5-10bp\0",
+    ];
+    static TYPE_STRING: [&[u8]; 4] = [b"ATG\0", b"GTG\0", b"TTG\0", b"Edge\0"];
+
+    let mut seq_data: [c_char; MAX_LINE * 2] = [0; MAX_LINE * 2];
+    let mut run_data: [c_char; MAX_LINE] = [0; MAX_LINE];
+    let mut buffer: [c_char; MAX_LINE] = [0; MAX_LINE];
+    let mut qt: [c_char; 10] = [0; 10];
+
+    /* Initialize sequence data */
+    libc::sprintf(
+        seq_data.as_mut_ptr(),
+        b"seqnum=%d;seqlen=%d;seqhdr=\"%s\"\0".as_ptr() as *const c_char,
+        sctr,
+        slen,
+        header,
+    );
+
+    /* Initialize run data string */
+    if is_meta == 0 {
+        libc::sprintf(
+            run_data.as_mut_ptr(),
+            b"version=Prodigal.v%s;run_type=Single;\0".as_ptr() as *const c_char,
+            version,
+        );
+        libc::strcat(
+            run_data.as_mut_ptr(),
+            b"model=\"Ab initio\";\0".as_ptr() as *const c_char,
+        );
+    } else {
+        libc::sprintf(
+            run_data.as_mut_ptr(),
+            b"version=Prodigal.v%s;run_type=Metagenomic;\0".as_ptr() as *const c_char,
+            version,
+        );
+        libc::sprintf(
+            buffer.as_mut_ptr(),
+            b"model=\"%s\";\0".as_ptr() as *const c_char,
+            mdesc,
+        );
+        libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
+    }
+    libc::sprintf(
+        buffer.as_mut_ptr(),
+        b"gc_cont=%.2f;transl_table=%d;uses_sd=%d\0".as_ptr() as *const c_char,
+        (*tinf).gc * 100.0,
+        (*tinf).trans_table,
+        (*tinf).uses_sd,
+    );
+    libc::strcat(run_data.as_mut_ptr(), buffer.as_ptr());
+
+    libc::qsort(
+        nod as *mut c_void,
+        nn as libc::size_t,
+        std::mem::size_of::<Node>() as libc::size_t,
+        Some(stopcmp_nodes as unsafe extern "C" fn(*const c_void, *const c_void) -> c_int),
+    );
+
+    libc::fprintf(
+        fh,
+        b"# Sequence Data: %s\n\0".as_ptr() as *const c_char,
+        seq_data.as_ptr(),
+    );
+    libc::fprintf(
+        fh,
+        b"# Run Data: %s\n\n\0".as_ptr() as *const c_char,
+        run_data.as_ptr(),
+    );
+
+    libc::fprintf(
+        fh,
+        b"Beg\tEnd\tStd\tTotal\tCodPot\tStrtSc\tCodon\tRBSMot\t\0".as_ptr() as *const c_char,
+    );
+    libc::fprintf(
+        fh,
+        b"Spacer\tRBSScr\tUpsScr\tTypeScr\tGCCont\n\0".as_ptr() as *const c_char,
+    );
+
+    for i in 0..nn {
+        if (*nod.offset(i as isize)).type_ == STOP {
+            continue;
+        }
+        if (*nod.offset(i as isize)).edge == 1 {
+            st_type = 3;
+        } else {
+            st_type = (*nod.offset(i as isize)).type_;
+        }
+        if (*nod.offset(i as isize)).stop_val != prev_stop
+            || (*nod.offset(i as isize)).strand != prev_strand
+        {
+            prev_stop = (*nod.offset(i as isize)).stop_val;
+            prev_strand = (*nod.offset(i as isize)).strand;
+            libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+        }
+        if (*nod.offset(i as isize)).strand == 1 {
+            libc::fprintf(
+                fh,
+                b"%d\t%d\t+\t%.2f\t%.2f\t%.2f\t%s\t\0".as_ptr() as *const c_char,
+                (*nod.offset(i as isize)).ndx + 1,
+                (*nod.offset(i as isize)).stop_val + 3,
+                (*nod.offset(i as isize)).cscore + (*nod.offset(i as isize)).sscore,
+                (*nod.offset(i as isize)).cscore,
+                (*nod.offset(i as isize)).sscore,
+                TYPE_STRING[st_type as usize].as_ptr() as *const c_char,
+            );
+        }
+        if (*nod.offset(i as isize)).strand == -1 {
+            libc::fprintf(
+                fh,
+                b"%d\t%d\t-\t%.2f\t%.2f\t%.2f\t%s\t\0".as_ptr() as *const c_char,
+                (*nod.offset(i as isize)).stop_val - 1,
+                (*nod.offset(i as isize)).ndx + 1,
+                (*nod.offset(i as isize)).cscore + (*nod.offset(i as isize)).sscore,
+                (*nod.offset(i as isize)).cscore,
+                (*nod.offset(i as isize)).sscore,
+                TYPE_STRING[st_type as usize].as_ptr() as *const c_char,
+            );
+        }
+        rbs1 =
+            (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[0] as usize] * (*tinf).st_wt;
+        rbs2 =
+            (*tinf).rbs_wt[(*nod.offset(i as isize)).rbs[1] as usize] * (*tinf).st_wt;
+        if (*tinf).uses_sd == 1 {
+            if rbs1 > rbs2 {
+                libc::fprintf(
+                    fh,
+                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
+                    SD_STRING[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
+                        as *const c_char,
+                    SD_SPACER[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
+                        as *const c_char,
+                    (*nod.offset(i as isize)).rscore,
+                );
+            } else {
+                libc::fprintf(
+                    fh,
+                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
+                    SD_STRING[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
+                        as *const c_char,
+                    SD_SPACER[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
+                        as *const c_char,
+                    (*nod.offset(i as isize)).rscore,
+                );
+            }
+        } else {
+            mer_text(
+                qt.as_mut_ptr(),
+                (*nod.offset(i as isize)).mot.len,
+                (*nod.offset(i as isize)).mot.ndx,
+            );
+            if (*tinf).no_mot > -0.5
+                && rbs1 > rbs2
+                && rbs1 > (*nod.offset(i as isize)).mot.score * (*tinf).st_wt
+            {
+                libc::fprintf(
+                    fh,
+                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
+                    SD_STRING[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
+                        as *const c_char,
+                    SD_SPACER[(*nod.offset(i as isize)).rbs[0] as usize].as_ptr()
+                        as *const c_char,
+                    (*nod.offset(i as isize)).rscore,
+                );
+            } else if (*tinf).no_mot > -0.5
+                && rbs2 >= rbs1
+                && rbs2 > (*nod.offset(i as isize)).mot.score * (*tinf).st_wt
+            {
+                libc::fprintf(
+                    fh,
+                    b"%s\t%s\t%.2f\t\0".as_ptr() as *const c_char,
+                    SD_STRING[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
+                        as *const c_char,
+                    SD_SPACER[(*nod.offset(i as isize)).rbs[1] as usize].as_ptr()
+                        as *const c_char,
+                    (*nod.offset(i as isize)).rscore,
+                );
+            } else {
+                if (*nod.offset(i as isize)).mot.len == 0 {
+                    libc::fprintf(
+                        fh,
+                        b"None\tNone\t%.2f\t\0".as_ptr() as *const c_char,
+                        (*nod.offset(i as isize)).rscore,
+                    );
+                } else {
+                    libc::fprintf(
+                        fh,
+                        b"%s\t%dbp\t%.2f\t\0".as_ptr() as *const c_char,
+                        qt.as_ptr(),
+                        (*nod.offset(i as isize)).mot.spacer,
+                        (*nod.offset(i as isize)).rscore,
+                    );
+                }
+            }
+        }
+        libc::fprintf(
+            fh,
+            b"%.2f\t%.2f\t%.3f\n\0".as_ptr() as *const c_char,
+            (*nod.offset(i as isize)).uscore,
+            (*nod.offset(i as isize)).tscore,
+            (*nod.offset(i as isize)).gc_cont,
+        );
+    }
+    libc::fprintf(fh, b"\n\0".as_ptr() as *const c_char);
+
+    libc::qsort(
+        nod as *mut c_void,
+        nn as libc::size_t,
+        std::mem::size_of::<Node>() as libc::size_t,
+        Some(compare_nodes as unsafe extern "C" fn(*const c_void, *const c_void) -> c_int),
+    );
+}
+
+/* Checks to see if a node boundary crosses a mask */
+
+#[no_mangle]
+pub unsafe extern "C" fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_int) -> c_int {
+    for i in 0..nm {
+        if y < (*mlist.offset(i as isize)).begin || x > (*mlist.offset(i as isize)).end {
+            continue;
+        }
+        return 1;
+    }
+    0
+}
+
+/* Return the minimum of two numbers */
+
+#[no_mangle]
+pub unsafe extern "C" fn dmin(x: f64, y: f64) -> f64 {
+    if x < y {
+        x
+    } else {
+        y
+    }
+}
+
+/* Return the maximum of two numbers */
+
+#[no_mangle]
+pub unsafe extern "C" fn dmax(x: f64, y: f64) -> f64 {
+    if x > y {
+        x
+    } else {
+        y
+    }
+}
+
+/* Sorting routine for nodes */
+
+#[no_mangle]
+pub unsafe extern "C" fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
+    let n1 = v1 as *const Node;
+    let n2 = v2 as *const Node;
+    if (*n1).ndx < (*n2).ndx {
+        return -1;
+    }
+    if (*n1).ndx > (*n2).ndx {
+        return 1;
+    }
+    if (*n1).strand > (*n2).strand {
+        return -1;
+    }
+    if (*n1).strand < (*n2).strand {
+        return 1;
+    }
+    0
+}
+
+/* Sorts all nodes by common stop */
+
+#[no_mangle]
+pub unsafe extern "C" fn stopcmp_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
+    let n1 = v1 as *const Node;
+    let n2 = v2 as *const Node;
+    if (*n1).stop_val < (*n2).stop_val {
+        return -1;
+    }
+    if (*n1).stop_val > (*n2).stop_val {
+        return 1;
+    }
+    if (*n1).strand > (*n2).strand {
+        return -1;
+    }
+    if (*n1).strand < (*n2).strand {
+        return 1;
+    }
+    if (*n1).ndx < (*n2).ndx {
+        return -1;
+    }
+    if (*n1).ndx > (*n2).ndx {
+        return 1;
+    }
+    0
+}
