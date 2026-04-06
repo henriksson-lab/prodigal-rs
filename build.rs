@@ -1,6 +1,6 @@
 fn main() {
     // All C code has been replaced by Rust.
-    // Only zlib is still needed for gzip-compressed input support.
-    println!("cargo:rustc-link-lib=z");
+    // zlib replaced by flate2 crate.
+    // Only libm is still linked for math functions used via libc::fprintf etc.
     println!("cargo:rustc-link-lib=m");
 }

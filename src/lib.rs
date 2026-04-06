@@ -1,4 +1,5 @@
 pub mod types;
+pub mod reader;
 pub mod bitmap;
 pub mod training;
 pub mod training_data;

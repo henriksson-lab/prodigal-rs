@@ -18,12 +18,16 @@ const MIN_SINGLE_GENOME: c_int = 20000;
 const IDEAL_SINGLE_GENOME: c_int = 100000;
 
 // ---------------------------------------------------------------------------
-// External C functions from zlib
+// Rust reader functions (reader.rs, replaces zlib gzopen/gzgets/gzseek/gzclose)
 // ---------------------------------------------------------------------------
 extern "C" {
-    fn gzopen(path: *const c_char, mode: *const c_char) -> *mut c_void;
-    fn gzclose(file: *mut c_void) -> c_int;
-    fn gzseek(file: *mut c_void, offset: libc::c_long, whence: c_int) -> libc::c_long;
+    fn seq_reader_open(path: *const c_char) -> *mut c_void;
+    fn seq_reader_close(file: *mut c_void) -> c_int;
+    fn seq_reader_seek(
+        file: *mut c_void,
+        offset: libc::c_long,
+        whence: c_int,
+    ) -> libc::c_long;
 }
 
 // ---------------------------------------------------------------------------
@@ -884,7 +888,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
 
     // Check i/o files and prepare them for reading/writing
     if !input_file.is_null() {
-        input_ptr = gzopen(input_file, b"r\0".as_ptr() as *const c_char);
+        input_ptr = seq_reader_open(input_file);
         if input_ptr.is_null() {
             libc::fprintf(
                 stderr,
@@ -895,9 +899,8 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
         }
     }
     if input_ptr.is_null() {
-        input_ptr = gzopen(
+        input_ptr = seq_reader_open(
             b"/dev/stdin\0".as_ptr() as *const c_char,
-            b"r\0".as_ptr() as *const c_char,
         );
         if input_ptr.is_null() {
             libc::fprintf(
@@ -1196,7 +1199,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 for j in 0..NUM_META {
                     libc::free(meta[j].tinf as *mut c_void);
                 }
-                gzclose(input_ptr);
+                seq_reader_close(input_ptr);
                 if output_ptr != stdout {
                     libc::fclose(output_ptr);
                 }
@@ -1217,7 +1220,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
                 b"-------------------------------------\n\0".as_ptr() as *const c_char,
             );
         }
-        if gzseek(input_ptr, 0, libc::SEEK_SET) == -1 {
+        if seq_reader_seek(input_ptr, 0, libc::SEEK_SET) == -1 {
             libc::fprintf(
                 stderr,
                 b"\nError: could not rewind input file.\n\0".as_ptr() as *const c_char,
@@ -1651,7 +1654,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     }
 
     // Close all filehandles
-    gzclose(input_ptr);
+    seq_reader_close(input_ptr);
     if output_ptr != stdout {
         libc::fclose(output_ptr);
     }

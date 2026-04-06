@@ -23,7 +23,7 @@ use std::os::raw::{c_char, c_double, c_int, c_uint, c_void};
 use crate::types::{Mask, Training, MAX_LINE, MAX_MASKS, MAX_SEQ, MASK_SIZE, WINDOW};
 
 extern "C" {
-    fn gzgets(file: *mut c_void, buf: *mut c_char, len: c_int) -> *mut c_char;
+    fn seq_reader_gets(file: *mut c_void, buf: *mut c_char, len: c_int) -> *mut c_char;
 
     // bitmap functions from bitmap.rs
     fn test(bm: *const u8, ndx: c_int) -> u8;
@@ -70,7 +70,7 @@ pub unsafe extern "C" fn read_seq_training(
     let mut gapsize: c_uint = 0;
 
     line[MAX_LINE] = 0;
-    while gzgets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
+    while seq_reader_gets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
         if hdr == 0
             && *line.as_ptr().add(libc::strlen(line.as_ptr()) - 1) != b'\n' as c_char
             && wrn == 0
@@ -253,7 +253,7 @@ pub unsafe extern "C" fn next_seq_multi(
         reading_seq = 1;
     }
     line[MAX_LINE] = 0;
-    while gzgets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
+    while seq_reader_gets(fp, line.as_mut_ptr(), MAX_LINE as c_int) != std::ptr::null_mut() {
         if reading_seq == 0
             && *line.as_ptr().add(libc::strlen(line.as_ptr()) - 1) != b'\n' as c_char
             && wrn == 0
