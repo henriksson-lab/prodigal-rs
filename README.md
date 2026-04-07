@@ -2,6 +2,8 @@
 
 Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool. Produces byte-identical output to the original C implementation, with no C dependencies.
 
+The use of Rust enables the integration of Prodigal as a library in your project, and in applications such as webassembly
+
 ## Installation
 
 ```bash
