@@ -1,4 +1,3 @@
-use std::os::raw::c_int;
 
 use crate::types::{Gene, Node, Training};
 use super::types::{PredictedGene, StartCodon, Strand};

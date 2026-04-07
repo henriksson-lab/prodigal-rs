@@ -114,7 +114,7 @@ fn main() {
         args.push(f.clone());
     }
 
-    let rc = unsafe { prodigal::pipeline::run_pipeline(&args) };
+    let rc = unsafe { prodigal_rs::pipeline::run_pipeline(&args) };
 
     process::exit(rc);
 }

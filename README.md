@@ -5,7 +5,7 @@ Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — 
 ## Installation
 
 ```bash
-cargo install prodigal
+cargo install prodigal-rs
 ```
 
 Or build from source:
@@ -20,7 +20,7 @@ No C compiler, zlib, or other system libraries required.
 
 ```toml
 [dependencies]
-prodigal = "2.6"
+prodigal-rs = "0.1"
 ```
 
 ### Metagenomic mode (simplest)
@@ -28,9 +28,9 @@ prodigal = "2.6"
 Predict genes using pre-trained models — no training step needed:
 
 ```rust
-use prodigal::predict_meta;
+use prodigal_rs::predict_meta;
 
-fn main() -> Result<(), prodigal::ProdigalError> {
+fn main() -> Result<(), prodigal_rs::ProdigalError> {
     let sequence = b"ATGCGATCGATCGATCG...";
     let genes = predict_meta(sequence)?;
 
@@ -49,9 +49,9 @@ fn main() -> Result<(), prodigal::ProdigalError> {
 Train on the genome first, then predict on individual contigs:
 
 ```rust
-use prodigal::{train, predict};
+use prodigal_rs::{train, predict};
 
-fn main() -> Result<(), prodigal::ProdigalError> {
+fn main() -> Result<(), prodigal_rs::ProdigalError> {
     // Train on the full genome (>= 20,000 bp required)
     let genome = std::fs::read("genome.fasta")?;
     let training = train(&genome)?;
@@ -69,8 +69,26 @@ fn main() -> Result<(), prodigal::ProdigalError> {
 
     // Save/load training for later reuse
     training.save("genome.trn")?;
-    let training = prodigal::TrainingData::load("genome.trn")?;
+    let training = prodigal_rs::TrainingData::load("genome.trn")?;
 
+    Ok(())
+}
+```
+
+### Batch processing (parallel)
+
+For processing many sequences, `MetaPredictor` caches the 50 models and evaluates them in parallel:
+
+```rust
+use prodigal_rs::MetaPredictor;
+
+fn main() -> Result<(), prodigal_rs::ProdigalError> {
+    let predictor = MetaPredictor::new()?;
+
+    for record in my_fasta_records {
+        let genes = predictor.predict(&record.sequence)?;
+        println!("{}: {} genes", record.name, genes.len());
+    }
     Ok(())
 }
 ```
@@ -78,9 +96,9 @@ fn main() -> Result<(), prodigal::ProdigalError> {
 ### Custom configuration
 
 ```rust
-use prodigal::{predict_meta_with, ProdigalConfig};
+use prodigal_rs::{predict_meta_with, ProdigalConfig};
 
-fn main() -> Result<(), prodigal::ProdigalError> {
+fn main() -> Result<(), prodigal_rs::ProdigalError> {
     let config = ProdigalConfig {
         translation_table: 4,    // Mycoplasma genetic code
         closed_ends: true,       // No genes running off edges
@@ -148,7 +166,7 @@ cargo test
 
 ## Performance
 
-~1.5-1.8x faster than the original C implementation (gcc -O3) on typical workloads.
+~2x faster than the original C implementation (gcc -O3) on typical workloads.
 
 ## License
 
@@ -157,3 +175,4 @@ GPL-3.0 (same as the original Prodigal).
 ## Credits
 
 Original Prodigal by Doug Hyatt, University of Tennessee / Oak Ridge National Lab.
+Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).

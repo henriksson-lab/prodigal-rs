@@ -1,4 +1,4 @@
-use prodigal::{predict, predict_meta, train, ProdigalConfig, Strand};
+use prodigal_rs::{predict, predict_meta, train, ProdigalConfig, Strand};
 
 /// Read the sample FASTA and extract raw sequence bytes (stripping headers/newlines).
 fn load_sample_sequences() -> Vec<(String, Vec<u8>)> {
@@ -123,7 +123,7 @@ fn test_training_save_load_roundtrip() {
     let path = dir.path().join("test.trn");
 
     training.save(&path).unwrap();
-    let loaded = prodigal::TrainingData::load(&path).unwrap();
+    let loaded = prodigal_rs::TrainingData::load(&path).unwrap();
 
     assert_eq!(training.gc(), loaded.gc());
     assert_eq!(training.translation_table(), loaded.translation_table());
@@ -186,7 +186,7 @@ fn test_custom_config() {
         closed_ends: true,
         ..Default::default()
     };
-    let genes = prodigal::predict_meta_with(seq, &config).unwrap();
+    let genes = prodigal_rs::predict_meta_with(seq, &config).unwrap();
     // With closed ends, edge genes are suppressed
     for g in &genes {
         assert!(!g.partial.0 && !g.partial.1, "closed_ends should prevent partial genes");

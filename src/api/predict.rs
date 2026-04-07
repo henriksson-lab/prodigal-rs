@@ -1,6 +1,6 @@
 use std::os::raw::c_int;
 
-use crate::types::{Mask, Node, Training, MAX_SEQ, NUM_META, STT_NOD};
+use crate::types::{Node, Training, MAX_SEQ, NUM_META};
 use super::convert::gene_to_predicted;
 use super::encode::SequenceBuffer;
 use super::training::TrainingData;
