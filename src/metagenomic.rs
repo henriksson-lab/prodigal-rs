@@ -1,57 +1,23 @@
 use crate::types::{MetagenomicBin, Training};
-
-extern "C" {
-    fn initialize_metagenome_0(tptr: *mut Training);
-    fn initialize_metagenome_1(tptr: *mut Training);
-    fn initialize_metagenome_2(tptr: *mut Training);
-    fn initialize_metagenome_3(tptr: *mut Training);
-    fn initialize_metagenome_4(tptr: *mut Training);
-    fn initialize_metagenome_5(tptr: *mut Training);
-    fn initialize_metagenome_6(tptr: *mut Training);
-    fn initialize_metagenome_7(tptr: *mut Training);
-    fn initialize_metagenome_8(tptr: *mut Training);
-    fn initialize_metagenome_9(tptr: *mut Training);
-    fn initialize_metagenome_10(tptr: *mut Training);
-    fn initialize_metagenome_11(tptr: *mut Training);
-    fn initialize_metagenome_12(tptr: *mut Training);
-    fn initialize_metagenome_13(tptr: *mut Training);
-    fn initialize_metagenome_14(tptr: *mut Training);
-    fn initialize_metagenome_15(tptr: *mut Training);
-    fn initialize_metagenome_16(tptr: *mut Training);
-    fn initialize_metagenome_17(tptr: *mut Training);
-    fn initialize_metagenome_18(tptr: *mut Training);
-    fn initialize_metagenome_19(tptr: *mut Training);
-    fn initialize_metagenome_20(tptr: *mut Training);
-    fn initialize_metagenome_21(tptr: *mut Training);
-    fn initialize_metagenome_22(tptr: *mut Training);
-    fn initialize_metagenome_23(tptr: *mut Training);
-    fn initialize_metagenome_24(tptr: *mut Training);
-    fn initialize_metagenome_25(tptr: *mut Training);
-    fn initialize_metagenome_26(tptr: *mut Training);
-    fn initialize_metagenome_27(tptr: *mut Training);
-    fn initialize_metagenome_28(tptr: *mut Training);
-    fn initialize_metagenome_29(tptr: *mut Training);
-    fn initialize_metagenome_30(tptr: *mut Training);
-    fn initialize_metagenome_31(tptr: *mut Training);
-    fn initialize_metagenome_32(tptr: *mut Training);
-    fn initialize_metagenome_33(tptr: *mut Training);
-    fn initialize_metagenome_34(tptr: *mut Training);
-    fn initialize_metagenome_35(tptr: *mut Training);
-    fn initialize_metagenome_36(tptr: *mut Training);
-    fn initialize_metagenome_37(tptr: *mut Training);
-    fn initialize_metagenome_38(tptr: *mut Training);
-    fn initialize_metagenome_39(tptr: *mut Training);
-    fn initialize_metagenome_40(tptr: *mut Training);
-    fn initialize_metagenome_41(tptr: *mut Training);
-    fn initialize_metagenome_42(tptr: *mut Training);
-    fn initialize_metagenome_43(tptr: *mut Training);
-    fn initialize_metagenome_44(tptr: *mut Training);
-    fn initialize_metagenome_45(tptr: *mut Training);
-    fn initialize_metagenome_46(tptr: *mut Training);
-    fn initialize_metagenome_47(tptr: *mut Training);
-    fn initialize_metagenome_48(tptr: *mut Training);
-    fn initialize_metagenome_49(tptr: *mut Training);
-}
+use crate::training::{
+    initialize_metagenome_0,  initialize_metagenome_1,  initialize_metagenome_2,
+    initialize_metagenome_3,  initialize_metagenome_4,  initialize_metagenome_5,
+    initialize_metagenome_6,  initialize_metagenome_7,  initialize_metagenome_8,
+    initialize_metagenome_9,  initialize_metagenome_10, initialize_metagenome_11,
+    initialize_metagenome_12, initialize_metagenome_13, initialize_metagenome_14,
+    initialize_metagenome_15, initialize_metagenome_16, initialize_metagenome_17,
+    initialize_metagenome_18, initialize_metagenome_19, initialize_metagenome_20,
+    initialize_metagenome_21, initialize_metagenome_22, initialize_metagenome_23,
+    initialize_metagenome_24, initialize_metagenome_25, initialize_metagenome_26,
+    initialize_metagenome_27, initialize_metagenome_28, initialize_metagenome_29,
+    initialize_metagenome_30, initialize_metagenome_31, initialize_metagenome_32,
+    initialize_metagenome_33, initialize_metagenome_34, initialize_metagenome_35,
+    initialize_metagenome_36, initialize_metagenome_37, initialize_metagenome_38,
+    initialize_metagenome_39, initialize_metagenome_40, initialize_metagenome_41,
+    initialize_metagenome_42, initialize_metagenome_43, initialize_metagenome_44,
+    initialize_metagenome_45, initialize_metagenome_46, initialize_metagenome_47,
+    initialize_metagenome_48, initialize_metagenome_49,
+};
 
 static DESCS: [(&[u8], &[u8], f64); 50] = [
     (b"Mycoplasma_bovis_PG45\0", b"B\0", 29.31),
@@ -106,7 +72,7 @@ static DESCS: [(&[u8], &[u8], f64); 50] = [
     (b"_Nostoc_azollae__0708\0", b"B\0", 38.45),
 ];
 
-static INIT_FNS: [unsafe extern "C" fn(*mut Training); 50] = [
+static INIT_FNS: [unsafe fn(*mut Training); 50] = [
     initialize_metagenome_0,  initialize_metagenome_1,
     initialize_metagenome_2,  initialize_metagenome_3,
     initialize_metagenome_4,  initialize_metagenome_5,
@@ -134,8 +100,7 @@ static INIT_FNS: [unsafe extern "C" fn(*mut Training); 50] = [
     initialize_metagenome_48, initialize_metagenome_49,
 ];
 
-#[no_mangle]
-pub unsafe extern "C" fn initialize_metagenomic_bins(meta: *mut MetagenomicBin) {
+pub unsafe fn initialize_metagenomic_bins(meta: *mut MetagenomicBin) {
     for i in 0..50 {
         let m = &mut *meta.add(i);
         INIT_FNS[i](m.tinf);

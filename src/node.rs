@@ -21,36 +21,16 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
 
+use crate::sequence::{
+    is_atg, is_gc, is_gtg, is_start, is_stop, is_ttg, mer_ndx, shine_dalgarno_exact,
+    shine_dalgarno_mm,
+};
 use crate::types::{
     Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_SAM_OVLP,
     META_PEN, MIN_EDGE_GENE, MIN_GENE, OPER_DIST, STOP, TTG,
 };
 
-extern "C" {
-    // sequence.rs functions
-    fn is_stop(seq: *const u8, n: c_int, tinf: *const Training) -> c_int;
-    fn is_start(seq: *const u8, n: c_int, tinf: *const Training) -> c_int;
-    fn is_atg(seq: *const u8, n: c_int) -> c_int;
-    fn is_gtg(seq: *const u8, n: c_int) -> c_int;
-    fn is_ttg(seq: *const u8, n: c_int) -> c_int;
-    fn is_gc(seq: *const u8, n: c_int) -> c_int;
-    fn mer_ndx(len: c_int, seq: *const u8, ndx: c_int) -> c_int;
-    fn shine_dalgarno_exact(
-        seq: *const u8,
-        pos: c_int,
-        start: c_int,
-        wt: *const f64,
-    ) -> c_int;
-    fn shine_dalgarno_mm(
-        seq: *const u8,
-        pos: c_int,
-        start: c_int,
-        wt: *const f64,
-    ) -> c_int;
-    fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int;
-    fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int);
-    fn calc_mer_bg(len: c_int, seq: *const u8, rseq: *const u8, slen: c_int, bg: *mut f64);
-}
+use crate::sequence::{max_fr, mer_text, calc_mer_bg};
 
 /// Write a Rust string to a file descriptor.
 #[inline]
@@ -77,8 +57,7 @@ unsafe fn cstr(p: *const c_char) -> &'static str {
   run off the edge, in which case they only have to be 50bp.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn add_nodes(
+pub unsafe fn add_nodes(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -310,8 +289,7 @@ pub unsafe extern "C" fn add_nodes(
 
 /* Simple routine to zero out the node scores */
 
-#[no_mangle]
-pub unsafe extern "C" fn reset_node_scores(nod: *mut Node, nn: c_int) {
+pub unsafe fn reset_node_scores(nod: *mut Node, nn: c_int) {
     for i in 0..nn as isize {
         for j in 0..3 {
             (*nod.offset(i)).star_ptr[j] = 0;
@@ -340,8 +318,7 @@ pub unsafe extern "C" fn reset_node_scores(nod: *mut Node, nn: c_int) {
   information about overlapping genes in order to build the models.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn record_overlapping_starts(
+pub unsafe fn record_overlapping_starts(
     nod: *mut Node,
     nn: c_int,
     tinf: *mut Training,
@@ -463,9 +440,8 @@ pub unsafe extern "C" fn record_overlapping_starts(
   the most common frame for G+C content.
 *******************************************************************************/
 
-#[no_mangle]
 #[allow(unused_assignments)]
-pub unsafe extern "C" fn record_gc_bias(
+pub unsafe fn record_gc_bias(
     gc: *mut c_int,
     nod: *mut Node,
     nn: c_int,
@@ -565,8 +541,7 @@ pub unsafe extern "C" fn record_gc_bias(
   background.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn calc_dicodon_gene(
+pub unsafe fn calc_dicodon_gene(
     tinf: *mut Training,
     seq: *mut u8,
     rseq: *mut u8,
@@ -651,8 +626,7 @@ pub unsafe extern "C" fn calc_dicodon_gene(
   Included as a stub for link compatibility.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn calc_amino_bg(
+pub unsafe fn calc_amino_bg(
     _tinf: *mut Training,
     _seq: *mut u8,
     _rseq: *mut u8,
@@ -667,8 +641,7 @@ pub unsafe extern "C" fn calc_amino_bg(
   Scoring function for all the start nodes.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn score_nodes(
+pub unsafe fn score_nodes(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -890,8 +863,7 @@ pub unsafe extern "C" fn score_nodes(
 }
 
 /* Calculate the GC Content for each start-stop pair */
-#[no_mangle]
-pub unsafe extern "C" fn calc_orf_gc(
+pub unsafe fn calc_orf_gc(
     seq: *mut u8,
     _rseq: *mut u8,
     _slen: c_int,
@@ -960,8 +932,7 @@ pub unsafe extern "C" fn calc_orf_gc(
   Score each candidate's coding.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn raw_coding_score(
+pub unsafe fn raw_coding_score(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -1126,8 +1097,7 @@ pub unsafe extern "C" fn raw_coding_score(
   uses an SD motif or not.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn determine_sd_usage(tinf: *mut Training) {
+pub unsafe fn determine_sd_usage(tinf: *mut Training) {
     (*tinf).uses_sd = 1;
     if (*tinf).rbs_wt[0] >= 0.0 {
         (*tinf).uses_sd = 0;
@@ -1149,8 +1119,7 @@ pub unsafe extern "C" fn determine_sd_usage(tinf: *mut Training) {
   appropriate weight for that motif.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn rbs_score(
+pub unsafe fn rbs_score(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -1179,13 +1148,13 @@ pub unsafe extern "C" fn rbs_score(
                     seq,
                     j,
                     (*nod.offset(i as isize)).ndx,
-                    (*tinf).rbs_wt.as_ptr(),
+                    (*tinf).rbs_wt.as_ptr() as *mut f64,
                 );
                 cur_sc[1] = shine_dalgarno_mm(
                     seq,
                     j,
                     (*nod.offset(i as isize)).ndx,
-                    (*tinf).rbs_wt.as_ptr(),
+                    (*tinf).rbs_wt.as_ptr() as *mut f64,
                 );
                 if cur_sc[0] > (*nod.offset(i as isize)).rbs[0] {
                     (*nod.offset(i as isize)).rbs[0] = cur_sc[0];
@@ -1207,13 +1176,13 @@ pub unsafe extern "C" fn rbs_score(
                     rseq,
                     j,
                     slen - 1 - (*nod.offset(i as isize)).ndx,
-                    (*tinf).rbs_wt.as_ptr(),
+                    (*tinf).rbs_wt.as_ptr() as *mut f64,
                 );
                 cur_sc[1] = shine_dalgarno_mm(
                     rseq,
                     j,
                     slen - 1 - (*nod.offset(i as isize)).ndx,
-                    (*tinf).rbs_wt.as_ptr(),
+                    (*tinf).rbs_wt.as_ptr() as *mut f64,
                 );
                 if cur_sc[0] > (*nod.offset(i as isize)).rbs[0] {
                     (*nod.offset(i as isize)).rbs[0] = cur_sc[0];
@@ -1231,8 +1200,7 @@ pub unsafe extern "C" fn rbs_score(
   Iterative Algorithm to train starts (Shine-Dalgarno motifs only).
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn train_starts_sd(
+pub unsafe fn train_starts_sd(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -1566,8 +1534,7 @@ pub unsafe extern "C" fn train_starts_sd(
   Iterative Algorithm to train starts (non-SD version).
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn train_starts_nonsd(
+pub unsafe fn train_starts_nonsd(
     seq: *mut u8,
     rseq: *mut u8,
     slen: c_int,
@@ -1935,8 +1902,7 @@ pub unsafe extern "C" fn train_starts_nonsd(
   For a given start, record the base composition of the upstream region.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn count_upstream_composition(
+pub unsafe fn count_upstream_composition(
     seq: *mut u8,
     slen: c_int,
     strand: c_int,
@@ -1966,8 +1932,7 @@ pub unsafe extern "C" fn count_upstream_composition(
   For a given start, score the base composition of the upstream region.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn score_upstream_composition(
+pub unsafe fn score_upstream_composition(
     seq: *mut u8,
     slen: c_int,
     nod: *mut Node,
@@ -2001,8 +1966,7 @@ pub unsafe extern "C" fn score_upstream_composition(
   return the highest scoring mer/spacer combination.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn find_best_upstream_motif(
+pub unsafe fn find_best_upstream_motif(
     tinf: *mut Training,
     seq: *mut u8,
     rseq: *mut u8,
@@ -2051,7 +2015,7 @@ pub unsafe extern "C" fn find_best_upstream_motif(
             } else {
                 spacendx = 0;
             }
-            index = mer_ndx(i + 3, wseq, j);
+            index = mer_ndx(i + 3, wseq as *mut u8, j);
             score = (*tinf).mot_wt[i as usize][spacendx as usize][index as usize];
             if score > max_sc {
                 max_sc = score;
@@ -2084,9 +2048,8 @@ pub unsafe extern "C" fn find_best_upstream_motif(
   Update the motif counts from a putative "real" start.
 *******************************************************************************/
 
-#[no_mangle]
 #[allow(unused_assignments)]
-pub unsafe extern "C" fn update_motif_counts(
+pub unsafe fn update_motif_counts(
     mcnt: *mut [[f64; 4096]; 4],
     zero: *mut f64,
     seq: *mut u8,
@@ -2135,7 +2098,7 @@ pub unsafe extern "C" fn update_motif_counts(
                 } else {
                     spacendx = 0;
                 }
-                let ndx = mer_ndx(i + 3, wseq, j);
+                let ndx = mer_ndx(i + 3, wseq as *mut u8, j);
                 for k in 0..4 {
                     (*mcnt.offset(i as isize))[k][ndx as usize] += 1.0;
                 }
@@ -2165,7 +2128,7 @@ pub unsafe extern "C" fn update_motif_counts(
                 } else {
                     spacendx = 0;
                 }
-                let ndx = mer_ndx(i + 3, wseq, j);
+                let ndx = mer_ndx(i + 3, wseq as *mut u8, j);
                 (*mcnt.offset(i as isize))[spacendx as usize][ndx as usize] += 1.0;
                 j += 1;
             }
@@ -2183,8 +2146,7 @@ pub unsafe extern "C" fn update_motif_counts(
   Build coverage map for motifs.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn build_coverage_map(
+pub unsafe fn build_coverage_map(
     real: *mut [[f64; 4096]; 4],
     good: *mut [[c_int; 4096]; 4],
     ng: f64,
@@ -2281,8 +2243,7 @@ pub unsafe extern "C" fn build_coverage_map(
   Intergenic modifier for connecting two genes.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn intergenic_mod(
+pub unsafe fn intergenic_mod(
     n1: *mut Node,
     n2: *mut Node,
     tinf: *mut Training,
@@ -2328,8 +2289,7 @@ pub unsafe extern "C" fn intergenic_mod(
   Write detailed scoring information about every single possible gene.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn write_start_file(
+pub unsafe fn write_start_file(
     fh: c_int,
     nod: *mut Node,
     nn: c_int,
@@ -2594,8 +2554,7 @@ pub unsafe extern "C" fn write_start_file(
 
 /* Checks to see if a node boundary crosses a mask */
 
-#[no_mangle]
-pub unsafe extern "C" fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_int) -> c_int {
+pub unsafe fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_int) -> c_int {
     for i in 0..nm {
         if y < (*mlist.offset(i as isize)).begin || x > (*mlist.offset(i as isize)).end {
             continue;
@@ -2607,8 +2566,7 @@ pub unsafe extern "C" fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_
 
 /* Return the minimum of two numbers */
 
-#[no_mangle]
-pub unsafe extern "C" fn dmin(x: f64, y: f64) -> f64 {
+pub unsafe fn dmin(x: f64, y: f64) -> f64 {
     if x < y {
         x
     } else {
@@ -2618,8 +2576,7 @@ pub unsafe extern "C" fn dmin(x: f64, y: f64) -> f64 {
 
 /* Return the maximum of two numbers */
 
-#[no_mangle]
-pub unsafe extern "C" fn dmax(x: f64, y: f64) -> f64 {
+pub unsafe fn dmax(x: f64, y: f64) -> f64 {
     if x > y {
         x
     } else {
@@ -2629,8 +2586,7 @@ pub unsafe extern "C" fn dmax(x: f64, y: f64) -> f64 {
 
 /* Sorting routine for nodes */
 
-#[no_mangle]
-pub unsafe extern "C" fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
+pub unsafe fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
     let n1 = v1 as *const Node;
     let n2 = v2 as *const Node;
     if (*n1).ndx < (*n2).ndx {
@@ -2650,8 +2606,7 @@ pub unsafe extern "C" fn compare_nodes(v1: *const c_void, v2: *const c_void) -> 
 
 /* Sorts all nodes by common stop */
 
-#[no_mangle]
-pub unsafe extern "C" fn stopcmp_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
+pub unsafe fn stopcmp_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
     let n1 = v1 as *const Node;
     let n2 = v2 as *const Node;
     if (*n1).stop_val < (*n2).stop_val {

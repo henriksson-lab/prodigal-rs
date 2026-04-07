@@ -5,8 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int};
 
-#[no_mangle]
-pub unsafe extern "C" fn read_training_file(
+pub unsafe fn read_training_file(
     path: *const c_char,
     tinf: *mut Training,
 ) -> c_int {
@@ -26,8 +25,7 @@ pub unsafe extern "C" fn read_training_file(
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn write_training_file(
+pub unsafe fn write_training_file(
     path: *const c_char,
     tinf: *mut Training,
 ) -> c_int {
@@ -50,8 +48,7 @@ pub unsafe extern "C" fn write_training_file(
 // Generate all 50 initialize_metagenome_N functions
 macro_rules! init_metagenome_fn {
     ($n:literal, $name:ident) => {
-        #[no_mangle]
-        pub unsafe extern "C" fn $name(tptr: *mut Training) {
+        pub unsafe fn $name(tptr: *mut Training) {
             training_data::load_metagenome($n, tptr);
         }
     };

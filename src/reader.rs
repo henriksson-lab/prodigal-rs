@@ -102,8 +102,7 @@ impl SeqReader {
 
 /// Open a file for reading. Returns an opaque pointer (like gzopen).
 /// The caller must eventually call `seq_reader_close`.
-#[no_mangle]
-pub unsafe extern "C" fn seq_reader_open(path: *const c_char) -> *mut c_void {
+pub unsafe fn seq_reader_open(path: *const c_char) -> *mut c_void {
     let c_str = std::ffi::CStr::from_ptr(path);
     let path_str = match c_str.to_str() {
         Ok(s) => s,
@@ -116,8 +115,7 @@ pub unsafe extern "C" fn seq_reader_open(path: *const c_char) -> *mut c_void {
 }
 
 /// Read a line from the reader (like gzgets). Returns null on EOF.
-#[no_mangle]
-pub unsafe extern "C" fn seq_reader_gets(
+pub unsafe fn seq_reader_gets(
     handle: *mut c_void,
     buf: *mut c_char,
     max_len: c_int,
@@ -131,8 +129,7 @@ pub unsafe extern "C" fn seq_reader_gets(
 }
 
 /// Seek to the beginning (like gzseek(fp, 0, SEEK_SET)). Returns 0 on success, -1 on failure.
-#[no_mangle]
-pub unsafe extern "C" fn seq_reader_seek(
+pub unsafe fn seq_reader_seek(
     handle: *mut c_void,
     _offset: i64,
     _whence: c_int,
@@ -142,8 +139,7 @@ pub unsafe extern "C" fn seq_reader_seek(
 }
 
 /// Close the reader and free memory (like gzclose).
-#[no_mangle]
-pub unsafe extern "C" fn seq_reader_close(handle: *mut c_void) -> c_int {
+pub unsafe fn seq_reader_close(handle: *mut c_void) -> c_int {
     if !handle.is_null() {
         drop(Box::from_raw(handle as *mut SeqReader));
     }

@@ -23,14 +23,8 @@ use std::os::raw::{c_char, c_double, c_int, c_uint, c_void};
 
 use crate::types::{Mask, Training, MAX_LINE, MAX_MASKS, MAX_SEQ, MASK_SIZE, WINDOW};
 
-extern "C" {
-    fn seq_reader_gets(file: *mut c_void, buf: *mut c_char, len: c_int) -> *mut c_char;
-
-    // bitmap functions from bitmap.rs
-    fn test(bm: *const u8, ndx: c_int) -> u8;
-    fn set(bm: *mut u8, ndx: c_int);
-    fn toggle(bm: *mut u8, ndx: c_int);
-}
+use crate::bitmap::{test, set, toggle};
+use crate::reader::seq_reader_gets;
 
 /// Find the length of a NUL-terminated C string in a `*const c_char` buffer.
 #[inline]
@@ -113,8 +107,7 @@ unsafe fn parse_uint_from_cstr(s: *const c_char) -> Option<c_uint> {
   preferred.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn read_seq_training(
+pub unsafe fn read_seq_training(
     fp: *mut c_void,
     seq: *mut u8,
     useq: *mut u8,
@@ -248,8 +241,7 @@ pub unsafe extern "C" fn read_seq_training(
 
 /* This routine reads in the next sequence in a FASTA/GB/EMBL file */
 
-#[no_mangle]
-pub unsafe extern "C" fn next_seq_multi(
+pub unsafe fn next_seq_multi(
     fp: *mut c_void,
     seq: *mut u8,
     useq: *mut u8,
@@ -400,8 +392,7 @@ pub unsafe extern "C" fn next_seq_multi(
 }
 
 /* Takes first word of header */
-#[no_mangle]
-pub unsafe extern "C" fn calc_short_header(
+pub unsafe fn calc_short_header(
     header: *mut c_char,
     short_header: *mut c_char,
     sctr: c_int,
@@ -429,8 +420,8 @@ pub unsafe extern "C" fn calc_short_header(
 
 /* Takes rseq and fills it up with the rev complement of seq */
 
-#[no_mangle]
-pub unsafe extern "C" fn rcom_seq(
+#[inline]
+pub unsafe fn rcom_seq(
     seq: *mut u8,
     rseq: *mut u8,
     useq: *mut u8,
@@ -454,8 +445,7 @@ pub unsafe extern "C" fn rcom_seq(
 /* Simple routines to say whether or not bases are */
 /* a, c, t, g, starts, stops, etc. */
 
-#[no_mangle]
-pub unsafe extern "C" fn is_a(seq: *mut u8, n: c_int) -> c_int {
+pub unsafe fn is_a(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 1 || test(seq, ndx + 1) == 1 {
         return 0;
@@ -463,8 +453,7 @@ pub unsafe extern "C" fn is_a(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_c(seq: *mut u8, n: c_int) -> c_int {
+pub unsafe fn is_c(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 1 || test(seq, ndx + 1) == 0 {
         return 0;
@@ -472,8 +461,7 @@ pub unsafe extern "C" fn is_c(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_g(seq: *mut u8, n: c_int) -> c_int {
+pub unsafe fn is_g(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 0 || test(seq, ndx + 1) == 1 {
         return 0;
@@ -481,8 +469,7 @@ pub unsafe extern "C" fn is_g(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_t(seq: *mut u8, n: c_int) -> c_int {
+pub unsafe fn is_t(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 0 || test(seq, ndx + 1) == 0 {
         return 0;
@@ -490,16 +477,15 @@ pub unsafe extern "C" fn is_t(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_n(useq: *mut u8, n: c_int) -> c_int {
+pub unsafe fn is_n(useq: *mut u8, n: c_int) -> c_int {
     if test(useq, n) == 0 {
         return 0;
     }
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_stop(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
+#[inline]
+pub unsafe fn is_stop(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     let tt = (*tinf).trans_table;
 
     /* TAG */
@@ -554,8 +540,8 @@ pub unsafe extern "C" fn is_stop(seq: *mut u8, n: c_int, tinf: *mut Training) ->
     0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
+#[inline]
+pub unsafe fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     let tt = (*tinf).trans_table;
 
     /* ATG */
@@ -588,32 +574,32 @@ pub unsafe extern "C" fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -
     0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_atg(seq: *mut u8, n: c_int) -> c_int {
+#[inline]
+pub unsafe fn is_atg(seq: *mut u8, n: c_int) -> c_int {
     if is_a(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
     }
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
+#[inline]
+pub unsafe fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
     if is_g(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
     }
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
+#[inline]
+pub unsafe fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
     if is_t(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
     }
     1
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn is_gc(seq: *mut u8, n: c_int) -> c_int {
+#[inline]
+pub unsafe fn is_gc(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) != test(seq, ndx + 1) {
         return 1;
@@ -621,8 +607,7 @@ pub unsafe extern "C" fn is_gc(seq: *mut u8, n: c_int) -> c_int {
     0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_double {
+pub unsafe fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_double {
     let mut sum: c_double = 0.0;
     let mut gc: c_double = 0.0;
     for i in a..=b {
@@ -635,8 +620,7 @@ pub unsafe extern "C" fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_doubl
 }
 
 /* Returns a single amino acid for this position */
-#[no_mangle]
-pub unsafe extern "C" fn amino(
+pub unsafe fn amino(
     seq: *mut u8,
     n: c_int,
     tinf: *mut Training,
@@ -824,8 +808,7 @@ pub unsafe extern "C" fn amino(
 }
 
 /* Converts an amino acid letter to a numerical value */
-#[no_mangle]
-pub unsafe extern "C" fn amino_num(aa: c_char) -> c_int {
+pub unsafe fn amino_num(aa: c_char) -> c_int {
     let c = aa as u8;
     if c == b'a' || c == b'A' { return 0; }
     if c == b'c' || c == b'C' { return 1; }
@@ -851,8 +834,7 @@ pub unsafe extern "C" fn amino_num(aa: c_char) -> c_int {
 }
 
 /* Converts a numerical value to an amino acid letter */
-#[no_mangle]
-pub unsafe extern "C" fn amino_letter(num: c_int) -> c_char {
+pub unsafe fn amino_letter(num: c_int) -> c_char {
     if num == 0 { return b'A' as c_char; }
     if num == 1 { return b'C' as c_char; }
     if num == 2 { return b'D' as c_char; }
@@ -878,8 +860,7 @@ pub unsafe extern "C" fn amino_letter(num: c_int) -> c_char {
 
 /* Returns the corresponding frame on the reverse strand */
 
-#[no_mangle]
-pub unsafe extern "C" fn rframe(fr: c_int, slen: c_int) -> c_int {
+pub unsafe fn rframe(fr: c_int, slen: c_int) -> c_int {
     let mut md = slen % 3 - 1;
     if md == 0 {
         md = 3;
@@ -889,8 +870,7 @@ pub unsafe extern "C" fn rframe(fr: c_int, slen: c_int) -> c_int {
 
 /* Simple 3-way max function */
 
-#[no_mangle]
-pub unsafe extern "C" fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
+pub unsafe fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
     if n1 > n2 {
         if n1 > n3 { 0 } else { 2 }
     } else {
@@ -904,8 +884,7 @@ pub unsafe extern "C" fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
   position in the sequence.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c_int {
+pub unsafe fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c_int {
     let mut gp_vec: Vec<c_int> = vec![-1; slen as usize];
     let gp: *mut c_int = gp_vec.as_mut_ptr();
     std::mem::forget(gp_vec);
@@ -968,8 +947,8 @@ pub unsafe extern "C" fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c
 }
 
 /* Converts a word of size len to a number */
-#[no_mangle]
-pub unsafe extern "C" fn mer_ndx(len: c_int, seq: *mut u8, pos: c_int) -> c_int {
+#[inline]
+pub unsafe fn mer_ndx(len: c_int, seq: *mut u8, pos: c_int) -> c_int {
     let mut ndx: c_int = 0;
     for i in 0..(2 * len) {
         ndx |= (test(seq, pos * 2 + i) as c_int) << i;
@@ -978,8 +957,7 @@ pub unsafe extern "C" fn mer_ndx(len: c_int, seq: *mut u8, pos: c_int) -> c_int 
 }
 
 /* Gives a text string for a start */
-#[no_mangle]
-pub unsafe extern "C" fn start_text(st: *mut c_char, type_: c_int) {
+pub unsafe fn start_text(st: *mut c_char, type_: c_int) {
     if type_ == 0 {
         *st.add(0) = b'A' as c_char;
     } else if type_ == 1 {
@@ -993,8 +971,7 @@ pub unsafe extern "C" fn start_text(st: *mut c_char, type_: c_int) {
 }
 
 /* Gives a text string for a mer of size 'len' (useful for outputting motifs) */
-#[no_mangle]
-pub unsafe extern "C" fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
+pub unsafe fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
     let letters: [c_char; 4] = [
         b'A' as c_char,
         b'G' as c_char,
@@ -1014,8 +991,7 @@ pub unsafe extern "C" fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
 }
 
 /* Builds a 'len'-mer background for whole sequence */
-#[no_mangle]
-pub unsafe extern "C" fn calc_mer_bg(
+pub unsafe fn calc_mer_bg(
     len: c_int,
     seq: *mut u8,
     rseq: *mut u8,
@@ -1046,8 +1022,8 @@ pub unsafe extern "C" fn calc_mer_bg(
   sequence upstream of a start.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn shine_dalgarno_exact(
+#[inline]
+pub unsafe fn shine_dalgarno_exact(
     seq: *mut u8,
     pos: c_int,
     start: c_int,
@@ -1180,8 +1156,8 @@ pub unsafe extern "C" fn shine_dalgarno_exact(
   sequence upstream of a start.  Only considers 5/6-mers with 1 mismatch.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn shine_dalgarno_mm(
+#[inline]
+pub unsafe fn shine_dalgarno_mm(
     seq: *mut u8,
     pos: c_int,
     start: c_int,
@@ -1293,8 +1269,7 @@ pub unsafe extern "C" fn shine_dalgarno_mm(
 }
 
 /* Returns the minimum of two numbers */
-#[no_mangle]
-pub unsafe extern "C" fn imin(x: c_int, y: c_int) -> c_int {
+pub unsafe fn imin(x: c_int, y: c_int) -> c_int {
     if x < y {
         x
     } else {

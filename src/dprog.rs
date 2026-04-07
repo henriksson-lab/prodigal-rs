@@ -21,9 +21,7 @@
 use std::os::raw::c_int;
 use crate::types::{Node, Training, STOP, MAX_OPP_OVLP, MAX_NODE_DIST};
 
-extern "C" {
-    fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64;
-}
+use crate::node::intergenic_mod;
 
 /*******************************************************************************
   Basic dynamic programming routine for predicting genes.  The 'flag' variable
@@ -32,8 +30,7 @@ extern "C" {
   routine does the final dynamic programming based on coding, RBS scores, etc.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn dprog(
+pub unsafe fn dprog(
     nod: *mut Node,
     nn: c_int,
     tinf: *mut Training,
@@ -185,8 +182,7 @@ pub unsafe extern "C" fn dprog(
   and n3 is used to untangle the 5' end of the second gene.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn score_connection(
+pub unsafe fn score_connection(
     nod: *mut Node,
     p1: c_int,
     p2: c_int,
@@ -504,8 +500,7 @@ pub unsafe extern "C" fn score_connection(
   the genes and eliminates ones with negative scores.
 *******************************************************************************/
 
-#[no_mangle]
-pub unsafe extern "C" fn eliminate_bad_genes(
+pub unsafe fn eliminate_bad_genes(
     nod: *mut Node,
     dbeg: c_int,
     tinf: *mut Training,

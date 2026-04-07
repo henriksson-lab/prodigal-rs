@@ -14,7 +14,7 @@ pub mod api;
 // Re-export the high-level API at crate root
 pub use api::{
     predict, predict_meta, predict_meta_with, predict_with, train, train_with,
-    PredictedGene, ProdigalConfig, ProdigalError, StartCodon, Strand, TrainingData,
+    MetaPredictor, PredictedGene, ProdigalConfig, ProdigalError, StartCodon, Strand, TrainingData,
 };
 
 /// Run Prodigal with the given command-line arguments (low-level CLI wrapper).

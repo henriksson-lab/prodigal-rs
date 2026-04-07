@@ -12,17 +12,8 @@ use std::os::raw::{c_char, c_int};
 
 use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SAM_OVLP, STOP};
 
-extern "C" {
-    fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64;
-    fn is_a(seq: *const u8, n: c_int) -> c_int;
-    fn is_c(seq: *const u8, n: c_int) -> c_int;
-    fn is_g(seq: *const u8, n: c_int) -> c_int;
-    fn is_t(seq: *const u8, n: c_int) -> c_int;
-    fn is_n(seq: *const u8, n: c_int) -> c_int;
-    fn amino(seq: *const u8, n: c_int, tinf: *mut Training, is_init: c_int) -> c_char;
-    fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int);
-    // fn start_text(st: *mut c_char, type_: c_int);
-}
+use crate::node::intergenic_mod;
+use crate::sequence::{is_a, is_c, is_g, is_t, is_n, amino, mer_text};
 
 /// Write a Rust string to a file descriptor.
 #[inline]
@@ -72,8 +63,7 @@ unsafe fn append_to_cbuf(buf: &mut [c_char], s: &str) {
 }
 
 /// Copies genes from the dynamic programming to a final array.
-#[no_mangle]
-pub unsafe extern "C" fn add_genes(
+pub unsafe fn add_genes(
     glist: *mut Gene,
     nod: *mut Node,
     dbeg: c_int,
@@ -123,8 +113,7 @@ pub unsafe extern "C" fn add_genes(
 }
 
 /// Tweak final starts to improve gene predictions.
-#[no_mangle]
-pub unsafe extern "C" fn tweak_final_starts(
+pub unsafe fn tweak_final_starts(
     genes: *mut Gene,
     ng: c_int,
     nod: *mut Node,
@@ -356,8 +345,7 @@ pub unsafe extern "C" fn tweak_final_starts(
 }
 
 /// Record gene data strings into the gene_data and score_data fields.
-#[no_mangle]
-pub unsafe extern "C" fn record_gene_data(
+pub unsafe fn record_gene_data(
     genes: *mut Gene,
     ng: c_int,
     nod: *mut Node,
@@ -527,8 +515,7 @@ pub unsafe extern "C" fn record_gene_data(
 }
 
 /// Print the genes. 'flag' indicates which format to use.
-#[no_mangle]
-pub unsafe extern "C" fn print_genes(
+pub unsafe fn print_genes(
     fp: c_int,
     genes: *mut Gene,
     ng: c_int,
@@ -700,8 +687,7 @@ pub unsafe extern "C" fn print_genes(
 }
 
 /// Print the gene translations.
-#[no_mangle]
-pub unsafe extern "C" fn write_translations(
+pub unsafe fn write_translations(
     fh: c_int,
     genes: *mut Gene,
     ng: c_int,
@@ -779,8 +765,7 @@ pub unsafe extern "C" fn write_translations(
 }
 
 /// Print the gene nucleotide sequences.
-#[no_mangle]
-pub unsafe extern "C" fn write_nucleotide_seqs(
+pub unsafe fn write_nucleotide_seqs(
     fh: c_int,
     genes: *mut Gene,
     ng: c_int,
@@ -861,8 +846,7 @@ pub unsafe extern "C" fn write_nucleotide_seqs(
 }
 
 /// Convert score to a percent confidence.
-#[no_mangle]
-pub unsafe extern "C" fn calculate_confidence(score: f64, start_weight: f64) -> f64 {
+pub unsafe fn calculate_confidence(score: f64, start_weight: f64) -> f64 {
     let mut conf: f64;
 
     if score / start_weight < 41.0 {
