@@ -9,10 +9,15 @@ pub mod dprog;
 pub mod gene;
 pub mod metagenomic;
 pub mod pipeline;
+pub mod api;
 
-/// Run Prodigal with the given command-line arguments.
-///
-/// `args` should be the full argv including the program name as the first element.
+// Re-export the high-level API at crate root
+pub use api::{
+    predict, predict_meta, predict_meta_with, predict_with, train, train_with,
+    PredictedGene, ProdigalConfig, ProdigalError, StartCodon, Strand, TrainingData,
+};
+
+/// Run Prodigal with the given command-line arguments (low-level CLI wrapper).
 ///
 /// # Safety
 ///

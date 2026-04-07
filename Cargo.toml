@@ -2,8 +2,22 @@
 name = "prodigal"
 version = "2.6.3"
 edition = "2021"
+rust-version = "1.70"
 description = "Prokaryotic gene prediction — Prodigal rewritten in Rust"
-license = "GPL-3.0"
+license = "GPL-3.0-only"
+repository = "https://github.com/henriksson-lab/prodigal-rs"
+homepage = "https://github.com/henriksson-lab/prodigal-rs"
+documentation = "https://docs.rs/prodigal"
+keywords = ["bioinformatics", "genomics", "gene-prediction", "prokaryote", "metagenomics"]
+categories = ["science", "command-line-utilities"]
+readme = "README.md"
+include = [
+    "/src/**/*.rs",
+    "/data/*.bin",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+]
 
 [lib]
 name = "prodigal"

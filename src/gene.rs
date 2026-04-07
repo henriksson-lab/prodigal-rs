@@ -711,7 +711,7 @@ pub unsafe extern "C" fn write_translations(
     useq: *mut u8,
     slen: c_int,
     tinf: *mut Training,
-    sctr: c_int,
+    _sctr: c_int,
     short_hdr: *mut c_char,
 ) {
     let short_hdr_str = cstr(short_hdr);
@@ -789,8 +789,8 @@ pub unsafe extern "C" fn write_nucleotide_seqs(
     rseq: *mut u8,
     useq: *mut u8,
     slen: c_int,
-    tinf: *mut Training,
-    sctr: c_int,
+    _tinf: *mut Training,
+    _sctr: c_int,
     short_hdr: *mut c_char,
 ) {
     let short_hdr_str = cstr(short_hdr);

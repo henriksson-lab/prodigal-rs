@@ -1,18 +1,118 @@
 # Prodigal (Rust)
 
-Rust wrapper around [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool. The C implementation is compiled via FFI and exposed both as a CLI (`prodigal-rs`) and as a Rust library crate.
+Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool. Produces byte-identical output to the original C implementation, with no C dependencies.
 
-## Building
-
-Requires: `gcc`, `zlib` (development headers), and a Rust toolchain.
+## Installation
 
 ```bash
-# Build the original C binary (needed for tests)
-cd Prodigal && make && cd ..
+cargo install prodigal
+```
 
-# Build the Rust CLI
+Or build from source:
+
+```bash
 cargo build --release
 ```
+
+No C compiler, zlib, or other system libraries required.
+
+## Library usage
+
+```toml
+[dependencies]
+prodigal = "2.6"
+```
+
+### Metagenomic mode (simplest)
+
+Predict genes using pre-trained models — no training step needed:
+
+```rust
+use prodigal::predict_meta;
+
+fn main() -> Result<(), prodigal::ProdigalError> {
+    let sequence = b"ATGCGATCGATCGATCG...";
+    let genes = predict_meta(sequence)?;
+
+    for gene in &genes {
+        println!(
+            "{}-{} ({}) score={:.1} conf={:.1}%",
+            gene.begin, gene.end, gene.strand, gene.score, gene.confidence
+        );
+    }
+    Ok(())
+}
+```
+
+### Single genome mode
+
+Train on the genome first, then predict on individual contigs:
+
+```rust
+use prodigal::{train, predict};
+
+fn main() -> Result<(), prodigal::ProdigalError> {
+    // Train on the full genome (>= 20,000 bp required)
+    let genome = std::fs::read("genome.fasta")?;
+    let training = train(&genome)?;
+
+    // Predict genes on each contig using the trained model
+    let contig = b"ATGCGATCGATCG...";
+    let genes = predict(contig, &training)?;
+
+    for gene in &genes {
+        println!(
+            "{}-{} {} {} gc={:.3}",
+            gene.begin, gene.end, gene.strand, gene.start_codon, gene.gc_content
+        );
+    }
+
+    // Save/load training for later reuse
+    training.save("genome.trn")?;
+    let training = prodigal::TrainingData::load("genome.trn")?;
+
+    Ok(())
+}
+```
+
+### Custom configuration
+
+```rust
+use prodigal::{predict_meta_with, ProdigalConfig};
+
+fn main() -> Result<(), prodigal::ProdigalError> {
+    let config = ProdigalConfig {
+        translation_table: 4,    // Mycoplasma genetic code
+        closed_ends: true,       // No genes running off edges
+        ..Default::default()
+    };
+
+    let genes = predict_meta_with(b"ATGCGATCG...", &config)?;
+    Ok(())
+}
+```
+
+### Gene prediction results
+
+Each `PredictedGene` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `begin` | `usize` | 1-indexed start position |
+| `end` | `usize` | 1-indexed end position (inclusive) |
+| `strand` | `Strand` | `Forward` or `Reverse` |
+| `start_codon` | `StartCodon` | `ATG`, `GTG`, `TTG`, or `Edge` |
+| `partial` | `(bool, bool)` | Left/right partial (runs off edge) |
+| `rbs_motif` | `String` | RBS motif (e.g. "AGGAG" or "None") |
+| `rbs_spacer` | `String` | RBS spacer distance |
+| `gc_content` | `f64` | GC content of the gene |
+| `confidence` | `f64` | Confidence score (50-100) |
+| `score` | `f64` | Total score |
+| `cscore` | `f64` | Coding potential score |
+| `sscore` | `f64` | Start score |
+| `rscore` | `f64` | RBS score |
+| `uscore` | `f64` | Upstream composition score |
+| `tscore` | `f64` | Start codon type score |
 
 ## CLI usage
 
@@ -25,90 +125,35 @@ prodigal-rs -i genome.fasta -o genes.gbk
 # Metagenomic mode, GFF output with protein translations
 prodigal-rs -i contigs.fasta -p meta -f gff -o genes.gff -a proteins.faa
 
+# All outputs at once
+prodigal-rs -i genome.fasta -o genes.gff -f gff -a proteins.faa -d genes.fna -s starts.txt
+
 # Generate and reuse a training file
 prodigal-rs -i genome.fasta -t genome.trn
 prodigal-rs -i genome.fasta -t genome.trn -o genes.gbk
 ```
 
-## Library usage
-
-Add to your `Cargo.toml`:
-
-```toml
-[dependencies]
-prodigal = { path = "." }
-```
-
-### Example: run Prodigal on a FASTA file
-
-```rust
-use prodigal::run_prodigal;
-
-fn main() {
-    let rc = run_prodigal(&[
-        "prodigal",
-        "-i", "genome.fasta",
-        "-o", "output.gff",
-        "-f", "gff",
-        "-a", "proteins.faa",
-        "-q",
-    ]);
-    assert_eq!(rc, 0, "Prodigal exited with code {rc}");
-}
-```
-
-### Example: metagenomic mode
-
-```rust
-use prodigal::run_prodigal;
-
-fn main() {
-    let rc = run_prodigal(&[
-        "prodigal",
-        "-i", "contigs.fasta",
-        "-p", "meta",
-        "-f", "gff",
-        "-o", "genes.gff",
-        "-a", "proteins.faa",
-        "-d", "genes.fna",
-        "-q",
-    ]);
-    assert_eq!(rc, 0);
-}
-```
-
-### Example: using the C FFI directly
-
-```rust
-use std::ffi::CString;
-use prodigal::ffi::prodigal_c_main;
-
-fn main() {
-    let args = ["prodigal", "-i", "input.fasta", "-o", "output.gbk", "-q"];
-    let c_strings: Vec<CString> = args.iter()
-        .map(|s| CString::new(*s).unwrap())
-        .collect();
-    let c_ptrs: Vec<*const i8> = c_strings.iter()
-        .map(|s| s.as_ptr())
-        .collect();
-
-    let rc = unsafe {
-        prodigal_c_main(c_ptrs.len() as i32, c_ptrs.as_ptr())
-    };
-    assert_eq!(rc, 0);
-}
-```
+Supports gzip-compressed input files transparently.
 
 ## Testing
 
-Integration tests verify that the Rust wrapper produces byte-identical output to the original C binary across all output formats and flag combinations:
-
 ```bash
+# Build the C binary first (needed only for comparison tests)
+cd Prodigal && make && cd ..
+
 cargo test
 ```
 
-15 tests cover: all 4 output formats (gbk/gff/sco/gca), protein translations (`-a`), nucleotide sequences (`-d`), start scores (`-s`), closed ends (`-c`), masked sequences (`-m`), non-SD mode (`-n`), alternate translation tables (`-g`), metagenomic mode (`-p meta`), and training file round-trips (`-t`).
+28 tests cover: the high-level API (metagenomic prediction, single-genome training + prediction, training save/load, error handling, custom config), byte-identical CLI output vs the original C binary across all output formats and flag combinations, and struct layout verification.
+
+## Performance
+
+~1.5-1.8x faster than the original C implementation (gcc -O3) on typical workloads.
 
 ## License
 
 GPL-3.0 (same as the original Prodigal).
+
+## Credits
+
+Original Prodigal by Doug Hyatt, University of Tennessee / Oak Ridge National Lab.

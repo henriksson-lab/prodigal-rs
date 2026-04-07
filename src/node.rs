@@ -464,6 +464,7 @@ pub unsafe extern "C" fn record_overlapping_starts(
 *******************************************************************************/
 
 #[no_mangle]
+#[allow(unused_assignments)]
 pub unsafe extern "C" fn record_gc_bias(
     gc: *mut c_int,
     nod: *mut Node,
@@ -892,11 +893,11 @@ pub unsafe extern "C" fn score_nodes(
 #[no_mangle]
 pub unsafe extern "C" fn calc_orf_gc(
     seq: *mut u8,
-    rseq: *mut u8,
-    slen: c_int,
+    _rseq: *mut u8,
+    _slen: c_int,
     nod: *mut Node,
     nn: c_int,
-    tinf: *mut Training,
+    _tinf: *mut Training,
 ) {
     let mut last: [c_int; 3] = [0; 3];
     let mut gc: [f64; 3] = [0.0; 3];
@@ -2009,7 +2010,7 @@ pub unsafe extern "C" fn find_best_upstream_motif(
     nod: *mut Node,
     stage: c_int,
 ) {
-    let mut start: c_int;
+    let start: c_int;
     let mut spacer: c_int;
     let mut spacendx: c_int;
     let mut index: c_int;
@@ -2084,6 +2085,7 @@ pub unsafe extern "C" fn find_best_upstream_motif(
 *******************************************************************************/
 
 #[no_mangle]
+#[allow(unused_assignments)]
 pub unsafe extern "C" fn update_motif_counts(
     mcnt: *mut [[f64; 4096]; 4],
     zero: *mut f64,
@@ -2093,7 +2095,7 @@ pub unsafe extern "C" fn update_motif_counts(
     nod: *mut Node,
     stage: c_int,
 ) {
-    let mut start: c_int;
+    let start: c_int;
     let mut spacendx: c_int;
     let wseq: *const u8;
     let mot: *const Motif = &(*nod).mot;

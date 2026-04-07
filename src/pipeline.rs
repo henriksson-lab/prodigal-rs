@@ -348,6 +348,7 @@ fn copy_standard_input_to_file(path: &std::ffi::CStr, quiet: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // Main pipeline: replaces C main()
 // ---------------------------------------------------------------------------
+#[allow(unused_assignments)]
 pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let argc = args.len() as c_int;
 

@@ -1,5 +1,4 @@
 use crate::types::{MetagenomicBin, Training};
-use std::os::raw::c_int;
 
 extern "C" {
     fn initialize_metagenome_0(tptr: *mut Training);
