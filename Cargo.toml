@@ -1,6 +1,6 @@
 [package]
 name = "prodigal-rs"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.70"
 description = "Prokaryotic gene prediction — Prodigal rewritten in Rust"
@@ -14,7 +14,9 @@ readme = "README.md"
 include = [
     "/src/**/*.rs",
     "/data/*.bin",
+    "/tests/**/*.rs",
     "/Cargo.toml",
+    "/Cargo.lock",
     "/LICENSE",
     "/README.md",
 ]

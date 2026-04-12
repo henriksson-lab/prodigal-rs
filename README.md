@@ -1,8 +1,13 @@
 # Prodigal (Rust)
 
-Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool. Produces byte-identical output to the original C implementation, with no C dependencies.
+Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool.
 
-The use of Rust enables the integration of Prodigal as a library in your project, and in applications such as webassembly
+This is a translation of the original code and not the authorative implementation. This code should generate bitwise
+equal output to the original. Please report any deviations
+
+The aim of this project is to increase performance, especially by providing this code through a type-safe library interface.
+The code can also be compiled to be used for webassembly.
+
 
 ## Installation
 
@@ -22,7 +27,7 @@ No C compiler, zlib, or other system libraries required.
 
 ```toml
 [dependencies]
-prodigal-rs = "0.1"
+prodigal-rs = "0.2"
 ```
 
 ### Metagenomic mode (simplest)
