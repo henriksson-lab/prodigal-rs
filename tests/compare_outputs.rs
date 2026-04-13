@@ -415,3 +415,269 @@ fn test_training_file_roundtrip() {
 
     eprintln!("[training-roundtrip] PASSED");
 }
+
+// ── Real genome comparison tests ─────────────────────────────────────────────
+
+/// Max bases to use from real genomes (keeps tests fast).
+const TEST_SEQ_LIMIT: usize = 100_000;
+
+/// Resolve a path relative to CARGO_MANIFEST_DIR's parent (sibling repo).
+fn sibling_repo_path(relative: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join(relative)
+}
+
+/// Write a truncated copy of a FASTA file (first `max_bp` bases per contig)
+/// into `dest`. Returns false if source doesn't exist.
+fn write_truncated_fasta(src: &Path, dest: &Path, max_bp: usize) -> bool {
+    if !src.exists() {
+        return false;
+    }
+    use std::io::Write;
+    let content = std::fs::read_to_string(src).unwrap();
+    let mut out = std::fs::File::create(dest).unwrap();
+    let mut bp_written = 0usize;
+    for line in content.lines() {
+        if line.starts_with('>') {
+            bp_written = 0;
+            writeln!(out, "{}", line).unwrap();
+        } else if bp_written < max_bp {
+            let bytes = line.trim().as_bytes();
+            let take = bytes.len().min(max_bp - bp_written);
+            out.write_all(&bytes[..take]).unwrap();
+            writeln!(out).unwrap();
+            bp_written += take;
+        }
+    }
+    true
+}
+
+/// Skip-aware compare_run for real genomes: truncates input to TEST_SEQ_LIMIT,
+/// returns false if source file doesn't exist.
+fn compare_run_real_genome(label: &str, src: &Path, common_args_template: &[&str], output_files: &[&str]) -> bool {
+    let tmp_input = TempDir::new().unwrap();
+    let truncated = tmp_input.path().join("input.fna");
+    if !write_truncated_fasta(src, &truncated, TEST_SEQ_LIMIT) {
+        eprintln!("[{label}] Skipping: input not found at {}", src.display());
+        return false;
+    }
+    let truncated_str = truncated.to_str().unwrap().to_string();
+    let args: Vec<String> = common_args_template.iter()
+        .map(|a| a.replace("INPUT", &truncated_str))
+        .collect();
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    compare_run(label, &str_args, output_files);
+    true
+}
+
+// ── Prokka genome: NC_011770 (truncated to 100 KB) ──────────────────────────
+
+#[test]
+fn test_prokka_genome_single_gbk() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_real_genome(
+        "prokka-genome-single-gbk",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-q"],
+        &["output.gbk"],
+    );
+}
+
+#[test]
+fn test_prokka_genome_single_all_outputs() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_real_genome(
+        "prokka-genome-single-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+fn test_prokka_genome_meta_gbk() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_real_genome(
+        "prokka-genome-meta-gbk",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-p", "meta", "-q"],
+        &["output.gbk"],
+    );
+}
+
+#[test]
+fn test_prokka_genome_meta_all_outputs() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_real_genome(
+        "prokka-genome-meta-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-p", "meta", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+fn test_prokka_genome_single_closed_nonsd() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_real_genome(
+        "prokka-genome-single-closed-nonsd",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-c", "-n", "-q"],
+        &["output.gbk"],
+    );
+}
+
+// ── Prokka plasmid (56 KB — small enough to use directly) ───────────────────
+
+#[test]
+fn test_prokka_plasmid_single_all_outputs() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/plasmid.fna");
+    compare_run_real_genome(
+        "prokka-plasmid-single-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna"],
+    );
+}
+
+#[test]
+fn test_prokka_plasmid_meta_all_outputs() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/plasmid.fna");
+    compare_run_real_genome(
+        "prokka-plasmid-meta-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-p", "meta", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna"],
+    );
+}
+
+// ── Priestia megaterium CP157504.1 (truncated to 100 KB) ────────────────────
+
+#[test]
+fn test_priestia_single_gbk() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_real_genome(
+        "priestia-single-gbk",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-q"],
+        &["output.gbk"],
+    );
+}
+
+#[test]
+fn test_priestia_single_all_outputs() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_real_genome(
+        "priestia-single-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+fn test_priestia_meta_gbk() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_real_genome(
+        "priestia-meta-gbk",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-p", "meta", "-q"],
+        &["output.gbk"],
+    );
+}
+
+#[test]
+fn test_priestia_meta_all_outputs() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_real_genome(
+        "priestia-meta-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-p", "meta", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+// ── Training file cross-compatibility on real genome ─────────────────────────
+
+#[test]
+fn test_prokka_genome_training_roundtrip() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    let tmp_input = TempDir::new().unwrap();
+    let truncated = tmp_input.path().join("input.fna");
+    if !write_truncated_fasta(&src, &truncated, TEST_SEQ_LIMIT) {
+        eprintln!("Skipping: prokka genome not found");
+        return;
+    }
+    let input_str = truncated.to_str().unwrap();
+
+    let tmp_c = TempDir::new().unwrap();
+    let tmp_rs = TempDir::new().unwrap();
+
+    // Generate training files from both binaries
+    let rc = run_prodigal(
+        &c_binary(),
+        &["-i", input_str, "-t", tmp_c.path().join("training.trn").to_str().unwrap(), "-q"],
+    );
+    assert_eq!(rc, 0, "C training failed on real genome");
+
+    let rc = run_prodigal(
+        &rust_binary(),
+        &["-i", input_str, "-t", tmp_rs.path().join("training.trn").to_str().unwrap(), "-q"],
+    );
+    assert_eq!(rc, 0, "Rust training failed on real genome");
+
+    assert_files_identical(
+        &tmp_c.path().join("training.trn"),
+        &tmp_rs.path().join("training.trn"),
+    );
+
+    // Use the training file to predict, compare outputs
+    let rc_c = run_prodigal(
+        &c_binary(),
+        &[
+            "-i", input_str,
+            "-t", tmp_c.path().join("training.trn").to_str().unwrap(),
+            "-o", tmp_c.path().join("output.gff").to_str().unwrap(),
+            "-f", "gff",
+            "-a", tmp_c.path().join("proteins.faa").to_str().unwrap(),
+            "-q",
+        ],
+    );
+    let rc_rs = run_prodigal(
+        &rust_binary(),
+        &[
+            "-i", input_str,
+            "-t", tmp_rs.path().join("training.trn").to_str().unwrap(),
+            "-o", tmp_rs.path().join("output.gff").to_str().unwrap(),
+            "-f", "gff",
+            "-a", tmp_rs.path().join("proteins.faa").to_str().unwrap(),
+            "-q",
+        ],
+    );
+    assert_eq!(rc_c, 0);
+    assert_eq!(rc_rs, 0);
+
+    assert_files_identical(
+        &tmp_c.path().join("output.gff"),
+        &tmp_rs.path().join("output.gff"),
+    );
+    assert_files_identical(
+        &tmp_c.path().join("proteins.faa"),
+        &tmp_rs.path().join("proteins.faa"),
+    );
+
+    eprintln!("[prokka-genome-training-roundtrip] PASSED");
+}

@@ -20,6 +20,23 @@ const VERSION_CSTR: &[u8] = b"2.6.3\0";
 const MIN_SINGLE_GENOME: c_int = 20000;
 const IDEAL_SINGLE_GENOME: c_int = 100000;
 
+/// Parsed pipeline configuration — constructed by the CLI (clap) layer.
+pub struct PipelineConfig {
+    pub input_file: Option<String>,
+    pub output_file: Option<String>,
+    pub trans_file: Option<String>,
+    pub nuc_file: Option<String>,
+    pub start_file: Option<String>,
+    pub train_file: Option<String>,
+    pub output_format: i32,
+    pub trans_table: i32,
+    pub closed: bool,
+    pub do_mask: bool,
+    pub force_nonsd: bool,
+    pub is_meta: bool,
+    pub quiet: bool,
+}
+
 use crate::reader::{seq_reader_open, seq_reader_close, seq_reader_seek};
 use crate::sequence::{read_seq_training, next_seq_multi, calc_short_header, calc_most_gc_frame, rcom_seq};
 use crate::node::{
@@ -42,30 +59,7 @@ unsafe fn sort_nodes(nodes: &mut [Node]) {
 }
 
 // ---------------------------------------------------------------------------
-// Helper: print version and exit
-// ---------------------------------------------------------------------------
-fn version() -> ! {
-    eprintln!("\nProdigal V{}: {}\n", VERSION, DATE);
-    std::process::exit(0);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: print brief usage and exit
-// ---------------------------------------------------------------------------
-fn usage(msg: &str) -> ! {
-    eprintln!("\n{}", msg);
-    eprint!("\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]");
-    eprintln!(" [-f output_type]");
-    eprint!("                 [-g tr_table] [-h] [-i input_file] [-m]");
-    eprintln!(" [-n] [-o output_file]");
-    eprint!("                 [-p mode] [-q] [-s start_file]");
-    eprintln!(" [-t training_file] [-v]");
-    eprintln!("\nDo 'prodigal -h' for more information.\n");
-    std::process::exit(15);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: print full help and exit
+// Helper: print full help and exit (used when stdin is a TTY with no input)
 // ---------------------------------------------------------------------------
 fn help() -> ! {
     eprint!("\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]");
@@ -148,15 +142,14 @@ fn copy_standard_input_to_file(path: &std::ffi::CStr, quiet: c_int) -> c_int {
 // Main pipeline: replaces C main()
 // ---------------------------------------------------------------------------
 #[allow(unused_assignments)]
-pub unsafe fn run_pipeline(args: &[String]) -> i32 {
-    let argc = args.len() as c_int;
-
-    // Convert args to C strings for compatibility (still needed for extern "C" calls)
-    let c_args: Vec<std::ffi::CString> = args
-        .iter()
-        .map(|s| std::ffi::CString::new(s.as_str()).unwrap())
-        .collect();
-    let argv: Vec<*const c_char> = c_args.iter().map(|s| s.as_ptr()).collect();
+pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
+    // Convert config file paths to CStrings for FFI
+    let input_cstr = config.input_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let output_cstr = config.output_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let trans_cstr = config.trans_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let nuc_cstr = config.nuc_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let start_cstr = config.start_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let train_cstr = config.train_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
 
     // Variable declarations
     let mut rv: c_int;
@@ -166,16 +159,16 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let mut ipath: c_int;
     let gc_frame: *mut c_int;
     let mut do_training: c_int;
-    let mut output: c_int;
+    let output: c_int = config.output_format;
     let mut max_phase: c_int;
-    let mut closed: c_int;
-    let mut do_mask: c_int;
+    let closed: c_int = config.closed as c_int;
+    let do_mask: c_int = config.do_mask as c_int;
     let mut nmask: c_int;
-    let mut force_nonsd: c_int;
-    let mut user_tt: c_int;
-    let mut is_meta: c_int;
+    let force_nonsd: c_int = config.force_nonsd as c_int;
+    let user_tt: c_int = config.trans_table;
+    let is_meta: c_int = config.is_meta as c_int;
     let mut num_seq: c_int;
-    let mut quiet: c_int;
+    let quiet: c_int = config.quiet as c_int;
     let mut piped: c_int;
     let mut max_slen: c_int;
     let mut max_score: f64;
@@ -183,13 +176,13 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     let mut low: f64;
     let mut high: f64;
 
-    // We still need raw C pointers for the extern "C" file path args
-    let mut train_file: *const c_char = std::ptr::null();
-    let mut start_file: *const c_char = std::ptr::null();
-    let mut trans_file: *const c_char = std::ptr::null();
-    let mut nuc_file: *const c_char = std::ptr::null();
-    let mut input_file: *const c_char = std::ptr::null();
-    let mut output_file: *const c_char = std::ptr::null();
+    // Raw C pointers for the extern "C" file path args
+    let train_file: *const c_char = train_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let start_file: *const c_char = start_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let trans_file: *const c_char = trans_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let nuc_file: *const c_char = nuc_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let mut input_file: *const c_char = input_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let output_file: *const c_char = output_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
 
     let input_copy_string = format!("tmp.prodigal.stdin.{}", std::process::id());
     let input_copy_cstr = std::ffi::CString::new(input_copy_string.as_str()).unwrap();
@@ -242,19 +235,12 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
     ipath = 0;
     ng = 0;
     nmask = 0;
-    user_tt = 0;
-    is_meta = 0;
     num_seq = 0;
-    quiet = 0;
     max_phase = 0;
     max_score = -100.0;
     do_training = 0;
     piped = 0;
     max_slen = 0;
-    output = 0;
-    closed = 0;
-    do_mask = 0;
-    force_nonsd = 0;
 
     // Set up file descriptors (stdout = fd 1)
     let stdout_fd: c_int = 1;
@@ -265,130 +251,7 @@ pub unsafe fn run_pipeline(args: &[String]) -> i32 {
 
     // Set default training parameters
     tinf.st_wt = 4.35;
-    tinf.trans_table = 11;
-
-    // Parse command line arguments using Rust string matching
-    let mut i: usize = 1;
-    while i < argc as usize {
-        let arg = args[i].as_str();
-
-        // Check if this is a flag that requires a parameter but is the last arg
-        if i == (argc - 1) as usize {
-            match arg.to_lowercase().as_str() {
-                "-t" | "-a" | "-g" | "-f" | "-s" | "-i" | "-o" | "-p" | "-d" => {
-                    usage("-a/-f/-g/-i/-o/-p/-s options require parameters.");
-                }
-                _ => {}
-            }
-        }
-
-        match arg.to_lowercase().as_str() {
-            "-c" => {
-                closed = 1;
-            }
-            "-q" => {
-                quiet = 1;
-            }
-            "-m" => {
-                do_mask = 1;
-            }
-            "-n" => {
-                force_nonsd = 1;
-            }
-            "-h" => {
-                help();
-            }
-            "-v" => {
-                version();
-            }
-            "-a" => {
-                trans_file = argv[i + 1];
-                i += 1;
-            }
-            "-d" => {
-                nuc_file = argv[i + 1];
-                i += 1;
-            }
-            "-i" => {
-                input_file = argv[i + 1];
-                i += 1;
-            }
-            "-o" => {
-                output_file = argv[i + 1];
-                i += 1;
-            }
-            "-s" => {
-                start_file = argv[i + 1];
-                i += 1;
-            }
-            "-t" => {
-                train_file = argv[i + 1];
-                i += 1;
-            }
-            "-g" => {
-                let val_str = args[i + 1].as_str();
-                match val_str.parse::<c_int>() {
-                    Ok(tt) => {
-                        if tt < 1
-                            || tt > 25
-                            || tt == 7
-                            || tt == 8
-                            || (tt >= 17 && tt <= 20)
-                        {
-                            usage("Invalid translation table specified.");
-                        }
-                        tinf.trans_table = tt;
-                        user_tt = tt;
-                    }
-                    Err(_) => {
-                        usage("Invalid translation table specified.");
-                    }
-                }
-                i += 1;
-            }
-            "-p" => {
-                let val = args[i + 1].as_str();
-                let first = val.as_bytes().first().copied().unwrap_or(0);
-                if first == b'0' || first == b's' || first == b'S' {
-                    is_meta = 0;
-                } else if first == b'1' || first == b'm' || first == b'M' {
-                    is_meta = 1;
-                } else {
-                    usage("Invalid meta/single genome type specified.");
-                }
-                i += 1;
-            }
-            "-f" => {
-                let farg = args[i + 1].as_str();
-                match farg.to_lowercase().as_str() {
-                    "0" | "gbk" => output = 0,
-                    "1" | "gca" => output = 1,
-                    "2" | "sco" => output = 2,
-                    "3" | "gff" => output = 3,
-                    _ => {
-                        // Also check if starts with 0/1/2/3
-                        if farg.starts_with('0') {
-                            output = 0;
-                        } else if farg.starts_with('1') {
-                            output = 1;
-                        } else if farg.starts_with('2') {
-                            output = 2;
-                        } else if farg.starts_with('3') {
-                            output = 3;
-                        } else {
-                            usage("Invalid output format specified.");
-                        }
-                    }
-                }
-                i += 1;
-            }
-            _ => {
-                usage("Unknown option.");
-            }
-        }
-
-        i += 1;
-    }
+    tinf.trans_table = if user_tt > 0 { user_tt } else { 11 };
 
     // Print header
     if quiet == 0 {

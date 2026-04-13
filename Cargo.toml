@@ -28,6 +28,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "prodigal-rs"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

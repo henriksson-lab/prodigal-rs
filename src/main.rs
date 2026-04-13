@@ -25,7 +25,7 @@ struct Cli {
 
     /// Translation table (default 11)
     #[arg(short = 'g')]
-    trans_table: Option<String>,
+    trans_table: Option<i32>,
 
     /// Input FASTA/Genbank file (default stdin)
     #[arg(short = 'i')]
@@ -60,61 +60,58 @@ struct Cli {
     train_file: Option<String>,
 }
 
+fn parse_output_format(s: &str) -> i32 {
+    match s.to_lowercase().as_str() {
+        "0" | "gbk" => 0,
+        "1" | "gca" => 1,
+        "2" | "sco" => 2,
+        "3" | "gff" => 3,
+        _ => {
+            eprintln!("\nInvalid output format specified.");
+            process::exit(15);
+        }
+    }
+}
+
+fn parse_mode(s: &str) -> bool {
+    match s.as_bytes().first() {
+        Some(b'0') | Some(b's') | Some(b'S') => false,
+        Some(b'1') | Some(b'm') | Some(b'M') => true,
+        _ => {
+            eprintln!("\nInvalid meta/single genome type specified.");
+            process::exit(15);
+        }
+    }
+}
+
+fn validate_trans_table(tt: i32) -> i32 {
+    if tt < 1 || tt > 25 || tt == 7 || tt == 8 || (tt >= 17 && tt <= 20) {
+        eprintln!("\nInvalid translation table specified.");
+        process::exit(15);
+    }
+    tt
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    let mut args: Vec<String> = vec!["prodigal".to_string()];
+    let config = prodigal_rs::pipeline::PipelineConfig {
+        input_file: cli.input_file,
+        output_file: cli.output_file,
+        trans_file: cli.trans_file,
+        nuc_file: cli.nuc_file,
+        start_file: cli.start_file,
+        train_file: cli.train_file,
+        output_format: cli.output_format.as_deref().map_or(0, parse_output_format),
+        trans_table: cli.trans_table.map_or(0, validate_trans_table),
+        closed: cli.closed,
+        do_mask: cli.mask,
+        force_nonsd: cli.force_nonsd,
+        is_meta: cli.mode.as_deref().map_or(false, parse_mode),
+        quiet: cli.quiet,
+    };
 
-    if let Some(ref f) = cli.trans_file {
-        args.push("-a".into());
-        args.push(f.clone());
-    }
-    if cli.closed {
-        args.push("-c".into());
-    }
-    if let Some(ref f) = cli.nuc_file {
-        args.push("-d".into());
-        args.push(f.clone());
-    }
-    if let Some(ref f) = cli.output_format {
-        args.push("-f".into());
-        args.push(f.clone());
-    }
-    if let Some(ref g) = cli.trans_table {
-        args.push("-g".into());
-        args.push(g.clone());
-    }
-    if let Some(ref f) = cli.input_file {
-        args.push("-i".into());
-        args.push(f.clone());
-    }
-    if cli.mask {
-        args.push("-m".into());
-    }
-    if cli.force_nonsd {
-        args.push("-n".into());
-    }
-    if let Some(ref f) = cli.output_file {
-        args.push("-o".into());
-        args.push(f.clone());
-    }
-    if let Some(ref p) = cli.mode {
-        args.push("-p".into());
-        args.push(p.clone());
-    }
-    if cli.quiet {
-        args.push("-q".into());
-    }
-    if let Some(ref f) = cli.start_file {
-        args.push("-s".into());
-        args.push(f.clone());
-    }
-    if let Some(ref f) = cli.train_file {
-        args.push("-t".into());
-        args.push(f.clone());
-    }
-
-    let rc = unsafe { prodigal_rs::pipeline::run_pipeline(&args) };
+    let rc = unsafe { prodigal_rs::pipeline::run_pipeline(&config) };
 
     process::exit(rc);
 }
