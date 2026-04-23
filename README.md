@@ -1,8 +1,11 @@
-# Prodigal (Rust)
+# Prodigal-rs (Rust)
 
-Pure Rust rewrite of [Prodigal](https://github.com/hyattpd/Prodigal) v2.6.3 — a prokaryotic gene prediction tool.
+Pure Rust translation of [Prodigal](https://github.com/hyattpd/Prodigal) — a prokaryotic gene prediction tool.
 
-**further compliance testing is pending**
+Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
+
+* 2026-04-23 - Code is ready for testing on real data, but stay vigilant for remaining errors. Compare with regular Prodigal on your data before considering this as a replacement. 
+* This translation is only marginally faster than the original
 
 ## This is an LLM-mediated faithful (hopefully) translation, not the original code!
 
@@ -51,8 +54,6 @@ Or build from source:
 ```bash
 cargo build --release
 ```
-
-No C compiler, zlib, or other system libraries required.
 
 ## Library usage
 
@@ -223,4 +224,3 @@ GPL-3.0 (same as the original Prodigal).
 ## Credits
 
 Original Prodigal by Doug Hyatt, University of Tennessee / Oak Ridge National Lab.
-Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
