@@ -107,8 +107,6 @@ fn predict_meta_inner(
     let mut max_score: f64 = -100.0;
     let mut max_phase: usize = 0;
     let mut nn: c_int = 0;
-    let mut best_ng: c_int = 0;
-
     unsafe {
         for i in 0..NUM_META {
             let need_rebuild = i == 0 || models[i].trans_table != models[i - 1].trans_table;
@@ -154,14 +152,44 @@ fn predict_meta_inner(
                     buf.genes.as_mut_ptr(), ng,
                     buf.nodes.as_mut_ptr(), tinf, 1,
                 );
-                best_ng = ng;
             }
         }
 
-        // Convert to PredictedGene
-        let tinf = &*models[max_phase];
-        let mut result = Vec::with_capacity(best_ng as usize);
-        for i in 0..best_ng {
+        // Re-run the best model so Gene records and node-derived metadata come
+        // from the same phase, matching the C CLI and MetaPredictor path.
+        buf.clear_nodes(nn);
+        let tinf = &mut *models[max_phase];
+        nn = add_nodes(
+            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
+            buf.nodes.as_mut_ptr(), closed,
+            buf.masks.as_mut_ptr(), buf.nmask, tinf,
+        );
+        sort_nodes(&mut buf.nodes[..nn as usize]);
+        reset_node_scores(buf.nodes.as_mut_ptr(), nn);
+        score_nodes(
+            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
+            buf.nodes.as_mut_ptr(), nn, tinf, closed, 1,
+        );
+        record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+        let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+        if ipath < 0 || ipath >= nn {
+            return Ok(Vec::new());
+        }
+        eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
+        let ng = add_genes(
+            buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath,
+        );
+        tweak_final_starts(
+            buf.genes.as_mut_ptr(), ng,
+            buf.nodes.as_mut_ptr(), nn, tinf,
+        );
+        record_gene_data(
+            buf.genes.as_mut_ptr(), ng,
+            buf.nodes.as_mut_ptr(), tinf, 1,
+        );
+
+        let mut result = Vec::with_capacity(ng as usize);
+        for i in 0..ng {
             result.push(gene_to_predicted(
                 &buf.genes[i as usize],
                 buf.nodes.as_ptr(),
@@ -342,5 +370,166 @@ fn predict_inner(
             ));
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn first_sample_sequence() -> Vec<u8> {
+        let fasta = include_str!("../../Prodigal/anthus_aco.fas");
+        let mut seq = Vec::new();
+        let mut in_first = false;
+
+        for line in fasta.lines() {
+            if line.starts_with('>') {
+                if in_first && !seq.is_empty() {
+                    break;
+                }
+                in_first = true;
+                continue;
+            }
+            if in_first {
+                seq.extend_from_slice(line.trim().as_bytes());
+            }
+        }
+
+        seq
+    }
+
+    #[test]
+    fn predict_meta_rebuilds_best_phase_before_conversion() {
+        with_large_stack(|| {
+            let seq = first_sample_sequence();
+            let config = ProdigalConfig::default();
+
+            let predicted = predict_meta_inner(&seq, &config).unwrap();
+
+            let mut buf = SequenceBuffer::new();
+            let closed = 0;
+            let mut models: Vec<Box<Training>> = Vec::with_capacity(NUM_META);
+            for i in 0..NUM_META {
+                let mut tinf: Box<Training> = Box::new(unsafe { std::mem::zeroed() });
+                unsafe {
+                    crate::training_data::load_metagenome(i, &mut *tinf as *mut Training);
+                }
+                models.push(tinf);
+            }
+
+            let (slen, gc) = unsafe { buf.encode(&seq, config.mask_n_runs) };
+            buf.ensure_node_capacity(slen);
+
+            let mut low = 0.88495 * gc - 0.0102337;
+            if low > 0.65 {
+                low = 0.65;
+            }
+            let mut high = 0.86596 * gc + 0.1131991;
+            if high < 0.35 {
+                high = 0.35;
+            }
+
+            let mut max_score = -100.0;
+            let mut max_phase = 0usize;
+            let mut nn: c_int = 0;
+
+            unsafe {
+                for i in 0..NUM_META {
+                    let need_rebuild = i == 0 || models[i].trans_table != models[i - 1].trans_table;
+                    let tinf = &mut *models[i];
+
+                    if need_rebuild {
+                        buf.clear_nodes(nn);
+                        nn = add_nodes(
+                            buf.seq.as_mut_ptr(),
+                            buf.rseq.as_mut_ptr(),
+                            slen,
+                            buf.nodes.as_mut_ptr(),
+                            closed,
+                            buf.masks.as_mut_ptr(),
+                            buf.nmask,
+                            tinf,
+                        );
+                        sort_nodes(&mut buf.nodes[..nn as usize]);
+                    }
+
+                    if tinf.gc < low || tinf.gc > high {
+                        continue;
+                    }
+
+                    reset_node_scores(buf.nodes.as_mut_ptr(), nn);
+                    score_nodes(
+                        buf.seq.as_mut_ptr(),
+                        buf.rseq.as_mut_ptr(),
+                        slen,
+                        buf.nodes.as_mut_ptr(),
+                        nn,
+                        tinf,
+                        closed,
+                        1,
+                    );
+                    record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+                    let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+                    if ipath >= 0 && ipath < nn && buf.nodes[ipath as usize].score > max_score {
+                        max_score = buf.nodes[ipath as usize].score;
+                        max_phase = i;
+                    }
+                }
+
+                let tinf = &mut *models[max_phase];
+                buf.clear_nodes(nn);
+                nn = add_nodes(
+                    buf.seq.as_mut_ptr(),
+                    buf.rseq.as_mut_ptr(),
+                    slen,
+                    buf.nodes.as_mut_ptr(),
+                    closed,
+                    buf.masks.as_mut_ptr(),
+                    buf.nmask,
+                    tinf,
+                );
+                sort_nodes(&mut buf.nodes[..nn as usize]);
+                reset_node_scores(buf.nodes.as_mut_ptr(), nn);
+                score_nodes(
+                    buf.seq.as_mut_ptr(),
+                    buf.rseq.as_mut_ptr(),
+                    slen,
+                    buf.nodes.as_mut_ptr(),
+                    nn,
+                    tinf,
+                    closed,
+                    1,
+                );
+                record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+                let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
+                eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
+                let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
+                tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
+                record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
+
+                let rebuilt: Vec<PredictedGene> = (0..ng)
+                    .map(|i| gene_to_predicted(&buf.genes[i as usize], buf.nodes.as_ptr(), tinf))
+                    .collect();
+
+                assert_eq!(predicted.len(), rebuilt.len());
+                for (a, b) in predicted.iter().zip(rebuilt.iter()) {
+                    assert_eq!(a.begin, b.begin);
+                    assert_eq!(a.end, b.end);
+                    assert_eq!(a.strand, b.strand);
+                    assert_eq!(a.start_codon, b.start_codon);
+                    assert_eq!(a.partial, b.partial);
+                    assert_eq!(a.rbs_motif, b.rbs_motif);
+                    assert_eq!(a.rbs_spacer, b.rbs_spacer);
+                    assert_eq!(a.gc_content, b.gc_content);
+                    assert_eq!(a.confidence, b.confidence);
+                    assert_eq!(a.score, b.score);
+                    assert_eq!(a.cscore, b.cscore);
+                    assert_eq!(a.sscore, b.sscore);
+                    assert_eq!(a.rscore, b.rscore);
+                    assert_eq!(a.uscore, b.uscore);
+                    assert_eq!(a.tscore, b.tscore);
+                }
+            }
+        });
     }
 }

@@ -1,0 +1,447 @@
+# Function-level mapping for code-complexity-comparator.
+# Generated from:
+#   ccc-rs analyze Prodigal -l c --recurse
+#   ccc-rs analyze src -l rust --recurse
+#
+# The C metagenome initializers initialize_metagenome_0 through
+# initialize_metagenome_49 are intentionally not mapped here: Rust stores those
+# models as binary fixtures loaded by load_metagenome(), so there is no
+# one-Rust-function-per-C-function comparator target for them.
+
+[[entries]]
+rust = "run_pipeline"
+rust_path = "src/pipeline.rs"
+other = "main"
+other_path = "Prodigal/main.c"
+
+[[entries]]
+rust = "add_genes"
+rust_path = "src/gene.rs"
+other = "add_genes"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "add_nodes"
+rust_path = "src/node.rs"
+other = "add_nodes"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "amino"
+rust_path = "src/sequence.rs"
+other = "amino"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "amino_letter"
+rust_path = "src/sequence.rs"
+other = "amino_letter"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "amino_num"
+rust_path = "src/sequence.rs"
+other = "amino_num"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "build_coverage_map"
+rust_path = "src/node.rs"
+other = "build_coverage_map"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "calc_dicodon_gene"
+rust_path = "src/node.rs"
+other = "calc_dicodon_gene"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "calc_mer_bg"
+rust_path = "src/sequence.rs"
+other = "calc_mer_bg"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "calc_most_gc_frame"
+rust_path = "src/sequence.rs"
+other = "calc_most_gc_frame"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "calc_orf_gc"
+rust_path = "src/node.rs"
+other = "calc_orf_gc"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "calc_short_header"
+rust_path = "src/sequence.rs"
+other = "calc_short_header"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "calculate_confidence"
+rust_path = "src/gene.rs"
+other = "calculate_confidence"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "clear"
+rust_path = "src/bitmap.rs"
+other = "clear"
+other_path = "Prodigal/bitmap.c"
+
+[[entries]]
+rust = "compare_nodes"
+rust_path = "src/node.rs"
+other = "compare_nodes"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "copy_standard_input_to_file"
+rust_path = "src/pipeline.rs"
+other = "copy_standard_input_to_file"
+other_path = "Prodigal/main.c"
+
+[[entries]]
+rust = "count_upstream_composition"
+rust_path = "src/node.rs"
+other = "count_upstream_composition"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "cross_mask"
+rust_path = "src/node.rs"
+other = "cross_mask"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "determine_sd_usage"
+rust_path = "src/node.rs"
+other = "determine_sd_usage"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "dmax"
+rust_path = "src/node.rs"
+other = "dmax"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "dmin"
+rust_path = "src/node.rs"
+other = "dmin"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "dprog"
+rust_path = "src/dprog.rs"
+other = "dprog"
+other_path = "Prodigal/dprog.c"
+
+[[entries]]
+rust = "eliminate_bad_genes"
+rust_path = "src/dprog.rs"
+other = "eliminate_bad_genes"
+other_path = "Prodigal/dprog.c"
+
+[[entries]]
+rust = "find_best_upstream_motif"
+rust_path = "src/node.rs"
+other = "find_best_upstream_motif"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "gc_content"
+rust_path = "src/sequence.rs"
+other = "gc_content"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "help"
+rust_path = "src/pipeline.rs"
+other = "help"
+other_path = "Prodigal/main.c"
+
+[[entries]]
+rust = "imin"
+rust_path = "src/sequence.rs"
+other = "imin"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "initialize_metagenomic_bins"
+rust_path = "src/metagenomic.rs"
+other = "initialize_metagenomic_bins"
+other_path = "Prodigal/metagenomic.c"
+
+[[entries]]
+rust = "intergenic_mod"
+rust_path = "src/node.rs"
+other = "intergenic_mod"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "is_a"
+rust_path = "src/sequence.rs"
+other = "is_a"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_atg"
+rust_path = "src/sequence.rs"
+other = "is_atg"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_c"
+rust_path = "src/sequence.rs"
+other = "is_c"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_g"
+rust_path = "src/sequence.rs"
+other = "is_g"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_gc"
+rust_path = "src/sequence.rs"
+other = "is_gc"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_gtg"
+rust_path = "src/sequence.rs"
+other = "is_gtg"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_n"
+rust_path = "src/sequence.rs"
+other = "is_n"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_start"
+rust_path = "src/sequence.rs"
+other = "is_start"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_stop"
+rust_path = "src/sequence.rs"
+other = "is_stop"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_t"
+rust_path = "src/sequence.rs"
+other = "is_t"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "is_ttg"
+rust_path = "src/sequence.rs"
+other = "is_ttg"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "max_fr"
+rust_path = "src/sequence.rs"
+other = "max_fr"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "mer_ndx"
+rust_path = "src/sequence.rs"
+other = "mer_ndx"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "mer_text"
+rust_path = "src/sequence.rs"
+other = "mer_text"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "next_seq_multi"
+rust_path = "src/sequence.rs"
+other = "next_seq_multi"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "print_genes"
+rust_path = "src/gene.rs"
+other = "print_genes"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "raw_coding_score"
+rust_path = "src/node.rs"
+other = "raw_coding_score"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "rbs_score"
+rust_path = "src/node.rs"
+other = "rbs_score"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "rcom_seq"
+rust_path = "src/sequence.rs"
+other = "rcom_seq"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "read_seq_training"
+rust_path = "src/sequence.rs"
+other = "read_seq_training"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "read_training_file"
+rust_path = "src/training.rs"
+other = "read_training_file"
+other_path = "Prodigal/training.c"
+
+[[entries]]
+rust = "record_gc_bias"
+rust_path = "src/node.rs"
+other = "record_gc_bias"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "record_gene_data"
+rust_path = "src/gene.rs"
+other = "record_gene_data"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "record_overlapping_starts"
+rust_path = "src/node.rs"
+other = "record_overlapping_starts"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "reset_node_scores"
+rust_path = "src/node.rs"
+other = "reset_node_scores"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "rframe"
+rust_path = "src/sequence.rs"
+other = "rframe"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "score_connection"
+rust_path = "src/dprog.rs"
+other = "score_connection"
+other_path = "Prodigal/dprog.c"
+
+[[entries]]
+rust = "score_nodes"
+rust_path = "src/node.rs"
+other = "score_nodes"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "score_upstream_composition"
+rust_path = "src/node.rs"
+other = "score_upstream_composition"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "set"
+rust_path = "src/bitmap.rs"
+other = "set"
+other_path = "Prodigal/bitmap.c"
+
+[[entries]]
+rust = "shine_dalgarno_exact"
+rust_path = "src/sequence.rs"
+other = "shine_dalgarno_exact"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "shine_dalgarno_mm"
+rust_path = "src/sequence.rs"
+other = "shine_dalgarno_mm"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "start_text"
+rust_path = "src/sequence.rs"
+other = "start_text"
+other_path = "Prodigal/sequence.c"
+
+[[entries]]
+rust = "stopcmp_nodes"
+rust_path = "src/node.rs"
+other = "stopcmp_nodes"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "test"
+rust_path = "src/bitmap.rs"
+other = "test"
+other_path = "Prodigal/bitmap.c"
+
+[[entries]]
+rust = "toggle"
+rust_path = "src/bitmap.rs"
+other = "toggle"
+other_path = "Prodigal/bitmap.c"
+
+[[entries]]
+rust = "train_starts_nonsd"
+rust_path = "src/node.rs"
+other = "train_starts_nonsd"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "train_starts_sd"
+rust_path = "src/node.rs"
+other = "train_starts_sd"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "tweak_final_starts"
+rust_path = "src/gene.rs"
+other = "tweak_final_starts"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "update_motif_counts"
+rust_path = "src/node.rs"
+other = "update_motif_counts"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "write_nucleotide_seqs"
+rust_path = "src/gene.rs"
+other = "write_nucleotide_seqs"
+other_path = "Prodigal/gene.c"
+
+[[entries]]
+rust = "write_start_file"
+rust_path = "src/node.rs"
+other = "write_start_file"
+other_path = "Prodigal/node.c"
+
+[[entries]]
+rust = "write_training_file"
+rust_path = "src/training.rs"
+other = "write_training_file"
+other_path = "Prodigal/training.c"
+
+[[entries]]
+rust = "write_translations"
+rust_path = "src/gene.rs"
+other = "write_translations"
+other_path = "Prodigal/gene.c"

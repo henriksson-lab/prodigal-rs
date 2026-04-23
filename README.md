@@ -25,6 +25,19 @@ But:
 * **Do not trust the benchmarks on this page**. They are used to help evaluate the translation. If you want improved performance, you generally have to use this code as a library, and use the additional tricks it offers. We generally accept performance losses in order to reduce our dependency issues
 * **Check the original Github pages for information about the package**. This README is kept sparse on purpose. It is not meant to be the primary source of information
 
+## Translation audit status
+
+The original C source is kept in `Prodigal/`. The root `ccc_mapping.toml` maps original C functions to their Rust counterparts for use with [`code-complexity-comparator`](../code-complexity-comparator). Most translated functions intentionally keep the original function name; the mapping adds path pins and maps C `main` to Rust `run_pipeline`.
+
+Known audit notes:
+
+* The C metagenome initializers `initialize_metagenome_0` through `initialize_metagenome_49` are represented in Rust as binary fixtures loaded by `load_metagenome`, so they are not one-function-per-function mappings in `ccc_mapping.toml`.
+* The `predict_meta` convenience API currently differs from the C CLI and `MetaPredictor`: after selecting the best metagenomic model, it converts genes using the node array left by the final model iteration rather than rebuilding/rescoring the best model's nodes. This can affect API-only metadata such as scores, RBS fields, strand/partial/start-codon fields, and confidence.
+* `dprog` omits one defensive guard from the original simple-overlap untangling pass. The C code skips when no matching stop node is found; the Rust loop can walk before the node array in that unexpected case.
+* CLI compatibility is not exact: uppercase aliases such as `-A`, `-C`, etc. and lowercase `-v` are accepted by the original but rejected by the current Clap-based CLI.
+
+The last local audit run used `ccc-rs analyze/compare/missing/constants-diff` against `Prodigal/` and `src/`, plus `cargo test`. Comparator output still contains expected noise from Rust formatting syntax and byte literals, so direct source inspection is still required for flagged functions.
+
 
 
 ## Installation
@@ -45,7 +58,7 @@ No C compiler, zlib, or other system libraries required.
 
 ```toml
 [dependencies]
-prodigal-rs = "0.2"
+prodigal-rs = "0.3"
 ```
 
 ### Metagenomic mode (simplest)
@@ -159,7 +172,7 @@ Each `PredictedGene` contains:
 
 ## CLI usage
 
-`prodigal-rs` accepts the same flags as the original `prodigal`:
+`prodigal-rs` accepts the main lowercase flags from the original `prodigal`:
 
 ```bash
 # Single genome, GenBank output
@@ -176,7 +189,7 @@ prodigal-rs -i genome.fasta -t genome.trn
 prodigal-rs -i genome.fasta -t genome.trn -o genes.gbk
 ```
 
-Supports gzip-compressed input files transparently.
+Supports gzip-compressed input files transparently. Exact CLI compatibility is still pending; see the audit notes above.
 
 ## Testing
 
@@ -187,11 +200,21 @@ cd Prodigal && make && cd ..
 cargo test
 ```
 
-28 tests cover: the high-level API (metagenomic prediction, single-genome training + prediction, training save/load, error handling, custom config), byte-identical CLI output vs the original C binary across all output formats and flag combinations, and struct layout verification.
+48 tests currently cover: the high-level API (metagenomic prediction, single-genome training + prediction, training save/load, error handling, custom config), byte-identical CLI output vs the original C binary across selected output formats and flag combinations, and struct layout verification.
 
 ## Performance
 
-~2x faster than the original C implementation (gcc -O3) on typical workloads.
+Local release-build comparison against the bundled original C `Prodigal/prodigal`, using `/usr/bin/time` on real FASTA inputs already present in the workspace. These are evaluation benchmarks only; they are not meant as a general performance claim across environments.
+
+| Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Output |
+|-------|------|------:|------:|---------:|------:|----------:|-------------:|--------|
+| `prokka genome` | `single` | 6.7 MB | 15.53 s | 12.59 s | 0.811x | 172600 KB | 281600 KB | identical GFF |
+| `prokka genome` | `meta` | 6.7 MB | 67.35 s | 57.95 s | 0.860x | 127711 KB | 234027 KB | identical GFF |
+| `priestia` | `meta` | 5.4 MB | 28.57 s | 23.64 s | 0.827x | 96968 KB | 206240 KB | identical GFF |
+
+Benchmark artifacts from the last run were written to `/tmp/prodigal_speed`.
+
+Current memory note: the Rust port is faster on these measured runs, but it currently uses more RSS. A likely major reason is that the Rust node buffer grows with `Vec::resize(..., zeroed())`, which materializes the entire new tail in memory, whereas the original C code uses `realloc` and only touches the subset of nodes that are actually populated.
 
 ## License
 
