@@ -35,7 +35,6 @@ The original C source is kept in `Prodigal/`. The root `ccc_mapping.toml` maps o
 Known audit notes:
 
 * The C metagenome initializers `initialize_metagenome_0` through `initialize_metagenome_49` are represented in Rust as binary fixtures loaded by `load_metagenome`, so they are not one-function-per-function mappings in `ccc_mapping.toml`.
-* The `predict_meta` convenience API currently differs from the C CLI and `MetaPredictor`: after selecting the best metagenomic model, it converts genes using the node array left by the final model iteration rather than rebuilding/rescoring the best model's nodes. This can affect API-only metadata such as scores, RBS fields, strand/partial/start-codon fields, and confidence.
 * `dprog` omits one defensive guard from the original simple-overlap untangling pass. The C code skips when no matching stop node is found; the Rust loop can walk before the node array in that unexpected case.
 * CLI compatibility is not exact: uppercase aliases such as `-A`, `-C`, etc. and lowercase `-v` are accepted by the original but rejected by the current Clap-based CLI.
 
@@ -132,6 +131,28 @@ fn main() -> Result<(), prodigal_rs::ProdigalError> {
 }
 ```
 
+To reuse an application-level Rayon pool, pass an `Arc<rayon::ThreadPool>` to the predictor. The pool should be built with the recommended worker stack size:
+
+```rust
+use std::sync::Arc;
+use prodigal_rs::{MetaPredictor, META_PREDICTOR_STACK_SIZE};
+
+fn main() -> Result<(), prodigal_rs::ProdigalError> {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .stack_size(META_PREDICTOR_STACK_SIZE)
+            .build()
+            .expect("failed to build Rayon pool"),
+    );
+
+    let predictor = MetaPredictor::with_thread_pool(pool)?;
+    let genes = predictor.predict(b"ATGCGATCG...")?;
+    println!("{} genes", genes.len());
+    Ok(())
+}
+```
+
 ### Custom configuration
 
 ```rust
@@ -201,7 +222,21 @@ cd Prodigal && make && cd ..
 cargo test
 ```
 
-48 tests currently cover: the high-level API (metagenomic prediction, single-genome training + prediction, training save/load, error handling, custom config), byte-identical CLI output vs the original C binary across selected output formats and flag combinations, and struct layout verification.
+49 default tests currently cover: the high-level API (metagenomic prediction, single-genome training + prediction, training save/load, error handling, custom config), byte-identical CLI output vs the original C binary across selected output formats and flag combinations, and struct layout verification.
+
+The comparison test target also includes larger real-data parity checks marked `#[ignore]` so the default suite stays fast. These run full-size sibling-repo fixtures without truncation and compare C and Rust outputs byte-for-byte:
+
+```bash
+cargo test --test compare_outputs -- --ignored full_single
+cargo test --test compare_outputs -- --ignored full_meta
+```
+
+The latest local release check also ran:
+
+```bash
+cargo clippy --all-targets -- -D warnings
+cargo package --allow-dirty
+```
 
 ## Performance
 
@@ -209,18 +244,17 @@ Local release-build comparison against the bundled original C `Prodigal/prodigal
 
 | Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Output |
 |-------|------|------:|------:|---------:|------:|----------:|-------------:|--------|
-| `prokka genome` | `single` | 6.7 MB | 15.53 s | 12.59 s | 0.811x | 172600 KB | 281600 KB | identical GFF |
-| `prokka genome` | `meta` | 6.7 MB | 67.35 s | 57.95 s | 0.860x | 127711 KB | 234027 KB | identical GFF |
-| `priestia` | `meta` | 5.4 MB | 28.57 s | 23.64 s | 0.827x | 96968 KB | 206240 KB | identical GFF |
+| `prokka genome` | `single` | 6.7 MB | 15.69 s | 13.03 s | 0.83x | 172344 KB | 281600 KB | identical GFF |
+| `prokka genome` | `meta` | 6.7 MB | 74.82 s | 62.35 s | 0.83x | 127708 KB | 233600 KB | identical GFF |
+| `priestia` | `single` | 5.4 MB | 8.56 s | 6.87 s | 0.80x | 120136 KB | 234560 KB | identical GFF |
+| `priestia` | `meta` | 5.4 MB | 30.95 s | 27.04 s | 0.87x | 96968 KB | 206080 KB | identical GFF |
 
-Benchmark artifacts from the last run were written to `/tmp/prodigal_speed`.
-
-Current memory note: the Rust port is faster on these measured runs, but it currently uses more RSS. A likely major reason is that the Rust node buffer grows with `Vec::resize(..., zeroed())`, which materializes the entire new tail in memory, whereas the original C code uses `realloc` and only touches the subset of nodes that are actually populated.
+Current memory note: the Rust port is faster on these measured runs, but it currently uses about 1.6-2.1x the peak RSS. A likely major reason is that the Rust node buffer grows with `Vec::resize(..., zeroed())`, which materializes the entire new tail in memory, whereas the original C code uses `realloc` and only touches the subset of nodes that are actually populated.
 
 ## License
 
 GPL-3.0 (same as the original Prodigal).
 
-## Credits
+## Citing
 
-Original Prodigal by Doug Hyatt, University of Tennessee / Oak Ridge National Lab.
+Hyatt, D., Chen, GL., LoCascio, P.F. et al. Prodigal: prokaryotic gene recognition and translation initiation site identification. BMC Bioinformatics 11, 119 (2010). doi:10.1186/1471-2105-11-119.

@@ -1,4 +1,11 @@
-use prodigal_rs::{predict, predict_meta, train, ProdigalConfig, Strand};
+#![allow(clippy::collapsible_else_if, clippy::manual_strip)]
+
+use std::sync::Arc;
+
+use prodigal_rs::{
+    predict, predict_meta, train, MetaPredictor, ProdigalConfig, Strand,
+    META_PREDICTOR_STACK_SIZE,
+};
 
 /// Read the sample FASTA and extract raw sequence bytes (stripping headers/newlines).
 fn load_sample_sequences() -> Vec<(String, Vec<u8>)> {
@@ -82,6 +89,35 @@ fn test_predict_meta_all_sequences() {
     }
     eprintln!("[meta all] total: {} genes across {} sequences", total_genes, seqs.len());
     assert!(total_genes > 0);
+}
+
+#[test]
+fn test_meta_predictor_accepts_shared_thread_pool() {
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .stack_size(META_PREDICTOR_STACK_SIZE)
+            .build()
+            .unwrap(),
+    );
+    let predictor_a = MetaPredictor::with_thread_pool(pool.clone()).unwrap();
+    let predictor_b =
+        MetaPredictor::with_config_and_thread_pool(ProdigalConfig::default(), pool).unwrap();
+
+    let seqs = load_sample_sequences();
+    let seq = &seqs[0].1;
+    let genes_a = predictor_a.predict(seq).unwrap();
+    let genes_b = predictor_b.predict(seq).unwrap();
+    let direct = predict_meta(seq).unwrap();
+
+    assert_eq!(genes_a.len(), genes_b.len());
+    assert_eq!(genes_a.len(), direct.len());
+    for (a, b) in genes_a.iter().zip(&genes_b) {
+        assert_eq!((a.begin, a.end, a.strand), (b.begin, b.end, b.strand));
+    }
+    for (a, b) in genes_a.iter().zip(&direct) {
+        assert_eq!((a.begin, a.end, a.strand), (b.begin, b.end, b.strand));
+    }
 }
 
 #[test]

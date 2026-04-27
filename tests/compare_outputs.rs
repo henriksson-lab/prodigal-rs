@@ -472,6 +472,22 @@ fn compare_run_real_genome(label: &str, src: &Path, common_args_template: &[&str
     true
 }
 
+/// Skip-aware compare_run for larger real genomes without truncating the input.
+/// Used by ignored tests because full-genome metagenomic runs are slow.
+fn compare_run_full_real_genome(label: &str, src: &Path, common_args_template: &[&str], output_files: &[&str]) -> bool {
+    if !src.exists() {
+        eprintln!("[{label}] Skipping: input not found at {}", src.display());
+        return false;
+    }
+    let input_str = src.to_str().unwrap();
+    let args: Vec<String> = common_args_template.iter()
+        .map(|a| a.replace("INPUT", input_str))
+        .collect();
+    let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    compare_run(label, &str_args, output_files);
+    true
+}
+
 // ── Prokka genome: NC_011770 (truncated to 100 KB) ──────────────────────────
 
 #[test]
@@ -530,6 +546,33 @@ fn test_prokka_genome_single_closed_nonsd() {
         &src,
         &["-i", "INPUT", "-o", "OUTDIR/output.gbk", "-c", "-n", "-q"],
         &["output.gbk"],
+    );
+}
+
+#[test]
+#[ignore = "runs full 6.7 MB real genome through both C and Rust binaries"]
+fn test_prokka_genome_full_single_all_outputs() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_full_real_genome(
+        "prokka-genome-full-single-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+#[ignore = "runs full 6.7 MB real genome through slow metagenomic mode"]
+fn test_prokka_genome_full_meta_gff() {
+    let src = sibling_repo_path("prokka-rs/prokka/test/genome.fna");
+    compare_run_full_real_genome(
+        "prokka-genome-full-meta-gff",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-p", "meta", "-q"],
+        &["output.gff"],
     );
 }
 
@@ -607,6 +650,33 @@ fn test_priestia_meta_all_outputs() {
           "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
           "-s", "OUTDIR/starts.txt", "-p", "meta", "-q"],
         &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+#[ignore = "runs full 5.4 MB real genome through both C and Rust binaries"]
+fn test_priestia_full_single_all_outputs() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_full_real_genome(
+        "priestia-full-single-all",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-a", "OUTDIR/proteins.faa", "-d", "OUTDIR/genes.fna",
+          "-s", "OUTDIR/starts.txt", "-q"],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
+#[ignore = "runs full 5.4 MB real genome through slow metagenomic mode"]
+fn test_priestia_full_meta_gff() {
+    let src = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
+    compare_run_full_real_genome(
+        "priestia-full-meta-gff",
+        &src,
+        &["-i", "INPUT", "-o", "OUTDIR/output.gff", "-f", "gff",
+          "-p", "meta", "-q"],
+        &["output.gff"],
     );
 }
 

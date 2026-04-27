@@ -3,10 +3,11 @@
 //! Caches the 50 metagenomic models and uses a rayon thread pool
 //! to score qualifying models in parallel.
 
+use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::os::raw::c_int;
 use std::sync::Arc;
 
-use rayon::prelude::*;
+use rayon::{prelude::*, ThreadPool};
 
 use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SEQ, NUM_META};
 use super::convert::gene_to_predicted;
@@ -15,7 +16,11 @@ use super::types::{PredictedGene, ProdigalConfig, ProdigalError};
 
 use super::predict::{sort_nodes, validate_config};
 
-const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
+/// Recommended stack size for Rayon pools used by `MetaPredictor`.
+///
+/// The low-level translated prediction routines use deep call stacks, so the
+/// default Rust thread stack can be too small for worker threads.
+pub const META_PREDICTOR_STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 
 use crate::node::{add_nodes, reset_node_scores, score_nodes, record_overlapping_starts};
 use crate::dprog::{dprog, eliminate_bad_genes};
@@ -26,8 +31,8 @@ use crate::gene::{add_genes, tweak_final_starts, record_gene_data};
 /// Pre-loads 50 metagenomic models and evaluates qualifying models
 /// in parallel using a rayon thread pool with large stacks.
 pub struct MetaPredictor {
-    pool: rayon::ThreadPool,
-    models: Arc<Vec<Training>>,
+    pool: Arc<ThreadPool>,
+    models: Arc<Vec<Box<Training>>>,
     config: ProdigalConfig,
 }
 
@@ -42,12 +47,34 @@ impl MetaPredictor {
         validate_config(&config)?;
 
         let pool = rayon::ThreadPoolBuilder::new()
-            .stack_size(STACK_SIZE)
+            .stack_size(META_PREDICTOR_STACK_SIZE)
             .build()
             .map_err(|e| ProdigalError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other, e.to_string(),
             )))?;
 
+        Self::with_config_and_thread_pool(config, Arc::new(pool))
+    }
+
+    /// Create a new predictor with default config and a shared Rayon thread pool.
+    ///
+    /// The supplied pool is reused for parallel metagenomic model evaluation.
+    /// For large inputs, build the pool with at least `META_PREDICTOR_STACK_SIZE`
+    /// stack bytes per worker thread.
+    pub fn with_thread_pool(pool: Arc<ThreadPool>) -> Result<Self, ProdigalError> {
+        Self::with_config_and_thread_pool(ProdigalConfig::default(), pool)
+    }
+
+    /// Create a new predictor with custom config and a shared Rayon thread pool.
+    ///
+    /// The supplied pool is reused for parallel metagenomic model evaluation.
+    /// For large inputs, build the pool with at least `META_PREDICTOR_STACK_SIZE`
+    /// stack bytes per worker thread.
+    pub fn with_config_and_thread_pool(
+        config: ProdigalConfig,
+        pool: Arc<ThreadPool>,
+    ) -> Result<Self, ProdigalError> {
+        validate_config(&config)?;
         let models = Arc::new(load_meta_models());
 
         Ok(MetaPredictor { pool, models, config })
@@ -65,21 +92,32 @@ impl MetaPredictor {
             });
         }
 
-        let models = &self.models;
-        let config = &self.config;
+        let seq = seq.to_vec();
+        let models = Arc::clone(&self.models);
+        let config = self.config.clone();
+        let pool = Arc::clone(&self.pool);
 
-        self.pool.install(|| predict_parallel(seq, models, config))
+        std::thread::Builder::new()
+            .stack_size(META_PREDICTOR_STACK_SIZE)
+            .spawn(move || pool.install(|| predict_parallel(&seq, &models, &config)))
+            .expect("failed to spawn worker thread")
+            .join()
+            .expect("worker thread panicked")
     }
 }
 
-fn load_meta_models() -> Vec<Training> {
-    let mut models: Vec<Training> = Vec::with_capacity(NUM_META);
+fn load_meta_models() -> Vec<Box<Training>> {
+    let mut models: Vec<Box<Training>> = Vec::with_capacity(NUM_META);
     for i in 0..NUM_META {
-        let mut tinf: Training = unsafe { std::mem::zeroed() };
         unsafe {
-            crate::training_data::load_metagenome(i, &mut tinf as *mut Training);
+            let layout = Layout::new::<Training>();
+            let ptr = alloc_zeroed(layout) as *mut Training;
+            if ptr.is_null() {
+                handle_alloc_error(layout);
+            }
+            crate::training_data::load_metagenome(i, ptr);
+            models.push(Box::from_raw(ptr));
         }
-        models.push(tinf);
     }
     models
 }
@@ -96,7 +134,7 @@ struct TransTableGroup {
 
 fn predict_parallel(
     seq: &[u8],
-    models: &[Training],
+    models: &[Box<Training>],
     config: &ProdigalConfig,
 ) -> Result<Vec<PredictedGene>, ProdigalError> {
     let closed = if config.closed_ends { 1 } else { 0 };
@@ -125,7 +163,7 @@ fn predict_parallel(
         if need_rebuild {
             // Build nodes for this translation table
             // We need a mutable Training pointer but add_nodes only reads from it
-            let mut tinf_copy = models[i].clone();
+            let mut tinf_copy = (*models[i]).clone();
             unsafe {
                 buf.clear_nodes(nn);
                 nn = add_nodes(
@@ -167,7 +205,7 @@ fn predict_parallel(
             let mut nodes = group.nodes.clone();
             let nn = group.nn;
             // Clone the Training struct for this thread (needed for mutable API)
-            let mut tinf = models[model_idx].clone();
+            let mut tinf = (*models[model_idx]).clone();
 
             unsafe {
                 reset_node_scores(nodes.as_mut_ptr(), nn);
@@ -198,7 +236,7 @@ fn predict_parallel(
 
     // Phase 3: Re-run the best model to extract genes.
     // Need to rebuild nodes for the best model's translation table.
-    let mut tinf = models[best.phase].clone();
+    let mut tinf = (*models[best.phase]).clone();
 
     // Find the group that contains the best model to get its nodes
     let best_group = groups.iter().find(|g| g.model_indices.contains(&best.phase)).unwrap();
