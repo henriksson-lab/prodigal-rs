@@ -8,7 +8,11 @@ use std::process::Command;
 fn get_c_sizes() -> Vec<(String, usize)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let c_src = format!("{}/Prodigal", manifest_dir);
-    let out_bin = format!("{}/target/struct_size_check", manifest_dir);
+    let out_bin = format!(
+        "{}/target/struct_size_check{}",
+        manifest_dir,
+        std::env::consts::EXE_SUFFIX
+    );
 
     // Compile the C size-check program
     let status = Command::new("gcc")

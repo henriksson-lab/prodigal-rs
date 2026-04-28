@@ -18,22 +18,23 @@
 // The low-level modules intentionally preserve the original Prodigal C
 // function boundaries and control flow for auditability against `Prodigal/`.
 
-pub mod types;
-pub mod reader;
+pub mod api;
 pub mod bitmap;
-pub mod training;
-pub mod training_data;
-pub mod sequence;
-pub mod node;
 pub mod dprog;
 pub mod gene;
 pub mod metagenomic;
+pub mod node;
+pub mod output;
 pub mod pipeline;
-pub mod api;
+pub mod reader;
+pub mod sequence;
+pub mod training;
+pub mod training_data;
+pub mod types;
 
 // Re-export the high-level API at crate root
 pub use api::{
-    predict, predict_meta, predict_meta_with, predict_with, train, train_with,
-    MetaPredictor, PredictedGene, ProdigalConfig, ProdigalError, StartCodon, Strand, TrainingData,
+    predict, predict_meta, predict_meta_with, predict_with, train, train_with, MetaPredictor,
+    PredictedGene, ProdigalConfig, ProdigalError, StartCodon, Strand, TrainingData,
     META_PREDICTOR_STACK_SIZE,
 };

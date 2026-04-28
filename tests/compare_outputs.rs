@@ -10,7 +10,8 @@ use tempfile::TempDir;
 
 /// Path to the original C binary (built via `make` in the Prodigal directory).
 fn c_binary() -> PathBuf {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("Prodigal/prodigal");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(format!("Prodigal/prodigal{}", std::env::consts::EXE_SUFFIX));
     assert!(
         p.exists(),
         "C prodigal binary not found at {}. Run `make` in Prodigal/ first.",

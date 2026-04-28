@@ -38,6 +38,14 @@ impl SeqReader {
         }
     }
 
+    pub fn stdin() -> io::Result<Self> {
+        let mut data = Vec::new();
+        io::stdin().read_to_end(&mut data)?;
+        Ok(SeqReader {
+            inner: BufReader::new(Box::new(Cursor::new(data))),
+        })
+    }
+
     /// Read a line (up to `max_len - 1` bytes) into the provided C buffer.
     /// Returns true if a line was read, false on EOF.
     /// Mimics gzgets: fills buf with up to max_len-1 chars + NUL, stops at newline.
@@ -48,7 +56,9 @@ impl SeqReader {
         }
 
         // Clear the buffer
-        unsafe { *buf = 0; }
+        unsafe {
+            *buf = 0;
+        }
 
         let mut line = Vec::new();
         let mut total = 0usize;
@@ -114,6 +124,14 @@ pub unsafe fn seq_reader_open(path: *const c_char) -> *mut c_void {
     }
 }
 
+/// Read all stdin into a seekable in-memory reader.
+pub fn seq_reader_open_stdin() -> *mut c_void {
+    match SeqReader::stdin() {
+        Ok(reader) => Box::into_raw(Box::new(reader)) as *mut c_void,
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 /// Read a line from the reader (like gzgets). Returns null on EOF.
 pub unsafe fn seq_reader_gets(
     handle: *mut c_void,
@@ -129,13 +147,13 @@ pub unsafe fn seq_reader_gets(
 }
 
 /// Seek to the beginning (like gzseek(fp, 0, SEEK_SET)). Returns 0 on success, -1 on failure.
-pub unsafe fn seq_reader_seek(
-    handle: *mut c_void,
-    _offset: i64,
-    _whence: c_int,
-) -> i64 {
+pub unsafe fn seq_reader_seek(handle: *mut c_void, _offset: i64, _whence: c_int) -> i64 {
     let reader = &mut *(handle as *mut SeqReader);
-    if reader.rewind() { 0 } else { -1 }
+    if reader.rewind() {
+        0
+    } else {
+        -1
+    }
 }
 
 /// Close the reader and free memory (like gzclose).

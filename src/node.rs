@@ -26,20 +26,16 @@ use crate::sequence::{
     shine_dalgarno_mm,
 };
 use crate::types::{
-    Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_SAM_OVLP,
-    META_PEN, MIN_EDGE_GENE, MIN_GENE, OPER_DIST, STOP, TTG,
+    Mask, Motif, Node, Training, ATG, EDGE_BONUS, EDGE_UPS, GTG, MAX_SAM_OVLP, META_PEN,
+    MIN_EDGE_GENE, MIN_GENE, OPER_DIST, STOP, TTG,
 };
 
-use crate::sequence::{max_fr, mer_text, calc_mer_bg};
+use crate::sequence::{calc_mer_bg, max_fr, mer_text};
 
 /// Write a Rust string to a file descriptor.
 #[inline]
 unsafe fn fprint(fp: c_int, s: &str) {
-    use std::io::Write;
-    use std::os::unix::io::FromRawFd;
-    let mut f = std::fs::File::from_raw_fd(fp);
-    let _ = f.write_all(s.as_bytes());
-    std::mem::forget(f); // don't close the fd
+    let _ = crate::output::write_to_handle(fp, s);
 }
 
 /// Convert a *const c_char (C string) to a &str.  Returns "" on null.
@@ -207,12 +203,7 @@ pub unsafe fn add_nodes(
         if is_start(rseq, i, tinf) == 1
             && is_atg(rseq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
-            && cross_mask(
-                slen - last[(i % 3) as usize] - 1,
-                slen - i - 1,
-                mlist,
-                nm,
-            ) == 0
+            && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
             (*nodes.offset(nn as isize)).ndx = slen - i - 1;
             (*nodes.offset(nn as isize)).type_ = ATG;
@@ -223,12 +214,7 @@ pub unsafe fn add_nodes(
         } else if is_start(rseq, i, tinf) == 1
             && is_gtg(rseq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
-            && cross_mask(
-                slen - last[(i % 3) as usize] - 1,
-                slen - i - 1,
-                mlist,
-                nm,
-            ) == 0
+            && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
             (*nodes.offset(nn as isize)).ndx = slen - i - 1;
             (*nodes.offset(nn as isize)).type_ = GTG;
@@ -239,12 +225,7 @@ pub unsafe fn add_nodes(
         } else if is_start(rseq, i, tinf) == 1
             && is_ttg(rseq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
-            && cross_mask(
-                slen - last[(i % 3) as usize] - 1,
-                slen - i - 1,
-                mlist,
-                nm,
-            ) == 0
+            && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
             (*nodes.offset(nn as isize)).ndx = slen - i - 1;
             (*nodes.offset(nn as isize)).type_ = TTG;
@@ -255,12 +236,7 @@ pub unsafe fn add_nodes(
         } else if i <= 2
             && closed == 0
             && (last[(i % 3) as usize] - i) > MIN_EDGE_GENE
-            && cross_mask(
-                slen - last[(i % 3) as usize] - 1,
-                slen - i - 1,
-                mlist,
-                nm,
-            ) == 0
+            && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
             (*nodes.offset(nn as isize)).ndx = slen - i - 1;
             (*nodes.offset(nn as isize)).type_ = ATG;
@@ -361,7 +337,8 @@ pub unsafe fn record_overlapping_starts(
                         (*nod.offset(i as isize)).star_ptr
                             [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
                     } else if flag == 1
-                        && ((*nod.offset(j as isize)).cscore + (*nod.offset(j as isize)).sscore
+                        && ((*nod.offset(j as isize)).cscore
+                            + (*nod.offset(j as isize)).sscore
                             + intergenic_mod(
                                 &mut *nod.offset(i as isize),
                                 &mut *nod.offset(j as isize),
@@ -386,17 +363,14 @@ pub unsafe fn record_overlapping_starts(
             max_sc = -100.0;
             let mut j = i - 3;
             while j < nn {
-                if j < 0
-                    || (*nod.offset(j as isize)).ndx < (*nod.offset(i as isize)).ndx - 2
-                {
+                if j < 0 || (*nod.offset(j as isize)).ndx < (*nod.offset(i as isize)).ndx - 2 {
                     j += 1;
                     continue;
                 }
                 if (*nod.offset(j as isize)).ndx - MAX_SAM_OVLP > (*nod.offset(i as isize)).ndx {
                     break;
                 }
-                if (*nod.offset(j as isize)).strand == -1
-                    && (*nod.offset(j as isize)).type_ != STOP
+                if (*nod.offset(j as isize)).strand == -1 && (*nod.offset(j as isize)).type_ != STOP
                 {
                     if (*nod.offset(j as isize)).stop_val >= (*nod.offset(i as isize)).ndx {
                         j += 1;
@@ -410,7 +384,8 @@ pub unsafe fn record_overlapping_starts(
                         (*nod.offset(i as isize)).star_ptr
                             [((*nod.offset(j as isize)).ndx % 3) as usize] = j;
                     } else if flag == 1
-                        && ((*nod.offset(j as isize)).cscore + (*nod.offset(j as isize)).sscore
+                        && ((*nod.offset(j as isize)).cscore
+                            + (*nod.offset(j as isize)).sscore
                             + intergenic_mod(
                                 &mut *nod.offset(j as isize),
                                 &mut *nod.offset(i as isize),
@@ -441,12 +416,7 @@ pub unsafe fn record_overlapping_starts(
 *******************************************************************************/
 
 #[allow(unused_assignments)]
-pub unsafe fn record_gc_bias(
-    gc: *mut c_int,
-    nod: *mut Node,
-    nn: c_int,
-    tinf: *mut Training,
-) {
+pub unsafe fn record_gc_bias(gc: *mut c_int, nod: *mut Node, nn: c_int, tinf: *mut Training) {
     let mut ctr: [[c_int; 3]; 3] = [[0; 3]; 3];
     let mut last: [c_int; 3] = [0; 3];
     let mut tot: f64 = 0.0;
@@ -496,8 +466,9 @@ pub unsafe fn record_gc_bias(
                 ctr[fr][j] = 0;
             }
             last[fr] = (*nod.offset(i as isize)).ndx;
-            ctr[fr][((3 - *gc.offset((*nod.offset(i as isize)).ndx as isize) + frmod) % 3)
-                as usize] = 1;
+            ctr[fr]
+                [((3 - *gc.offset((*nod.offset(i as isize)).ndx as isize) + frmod) % 3) as usize] =
+                1;
         } else if (*nod.offset(i as isize)).strand == -1 {
             let mut j = last[fr] + 3;
             while j <= (*nod.offset(i as isize)).ndx {
@@ -521,8 +492,8 @@ pub unsafe fn record_gc_bias(
     }
     for i in 0..nn {
         if (*nod.offset(i as isize)).type_ != STOP {
-            let len = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
-                + 1;
+            let len =
+                ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs() + 1;
             (*tinf).bias[(*nod.offset(i as isize)).gc_bias as usize] += (*nod.offset(i as isize))
                 .gc_score[(*nod.offset(i as isize)).gc_bias as usize]
                 * len as f64
@@ -563,15 +534,11 @@ pub unsafe fn calc_dicodon_gene(
     let mut path = dbeg;
     in_gene = 0;
     while path != -1 {
-        if (*nod.offset(path as isize)).strand == -1
-            && (*nod.offset(path as isize)).type_ != STOP
-        {
+        if (*nod.offset(path as isize)).strand == -1 && (*nod.offset(path as isize)).type_ != STOP {
             in_gene = -1;
             left = slen - (*nod.offset(path as isize)).ndx - 1;
         }
-        if (*nod.offset(path as isize)).strand == 1
-            && (*nod.offset(path as isize)).type_ == STOP
-        {
+        if (*nod.offset(path as isize)).strand == 1 && (*nod.offset(path as isize)).type_ == STOP {
             in_gene = 1;
             right = (*nod.offset(path as isize)).ndx + 2;
         }
@@ -726,8 +693,9 @@ pub unsafe fn score_nodes(
             }
 
             /* Penalize upstream score if choosing this start would stop
-               the gene from running off the edge. */
-            if closed == 0 && (*nod.offset(i as isize)).ndx <= 2
+            the gene from running off the edge. */
+            if closed == 0
+                && (*nod.offset(i as isize)).ndx <= 2
                 && (*nod.offset(i as isize)).strand == 1
             {
                 (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
@@ -740,8 +708,7 @@ pub unsafe fn score_nodes(
                 let mut j = i - 1;
                 while j >= 0 {
                     if (*nod.offset(j as isize)).edge == 1
-                        && (*nod.offset(i as isize)).stop_val
-                            == (*nod.offset(j as isize)).stop_val
+                        && (*nod.offset(i as isize)).stop_val == (*nod.offset(j as isize)).stop_val
                     {
                         (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
                         break;
@@ -752,8 +719,7 @@ pub unsafe fn score_nodes(
                 let mut j = i + 1;
                 while j < nn {
                     if (*nod.offset(j as isize)).edge == 1
-                        && (*nod.offset(i as isize)).stop_val
-                            == (*nod.offset(j as isize)).stop_val
+                        && (*nod.offset(i as isize)).stop_val == (*nod.offset(j as isize)).stop_val
                     {
                         (*nod.offset(i as isize)).uscore += EDGE_UPS * (*tinf).st_wt;
                         break;
@@ -787,8 +753,7 @@ pub unsafe fn score_nodes(
             && ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() < 250
         {
             negf = 250.0
-                / ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
-                    as f64;
+                / ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() as f64;
             posf = ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
                 as f64
                 / 250.0;
@@ -817,11 +782,9 @@ pub unsafe fn score_nodes(
             && slen < 3000
             && edge_gene == 0.0
             && ((*nod.offset(i as isize)).cscore < 5.0
-                || ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
-                    < 120)
+                || ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() < 120)
         {
-            (*nod.offset(i as isize)).cscore -=
-                META_PEN * dmax(0.0, (3000 - slen) as f64 / 2700.0);
+            (*nod.offset(i as isize)).cscore -= META_PEN * dmax(0.0, (3000 - slen) as f64 / 2700.0);
         }
 
         /* Base Start Score */
@@ -839,8 +802,7 @@ pub unsafe fn score_nodes(
                 }
             } else if is_meta == 1 && slen < 3000 && (*nod.offset(i as isize)).edge == 1 {
                 min_meta_len = (slen as f64).sqrt() * 5.0;
-                if ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs()
-                    as f64
+                if ((*nod.offset(i as isize)).ndx - (*nod.offset(i as isize)).stop_val).abs() as f64
                     >= min_meta_len
                 {
                     if (*nod.offset(i as isize)).cscore >= 0.0 {
@@ -890,8 +852,8 @@ pub unsafe fn calc_orf_gc(
         } else if (*nod.offset(i as isize)).strand == 1 {
             let mut j = last[fr] - 3;
             while j >= (*nod.offset(i as isize)).ndx {
-                gc[fr] += is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64
-                    + is_gc(seq, j + 2) as f64;
+                gc[fr] +=
+                    is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64 + is_gc(seq, j + 2) as f64;
                 j -= 3;
             }
             gsize = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
@@ -915,8 +877,8 @@ pub unsafe fn calc_orf_gc(
         } else if (*nod.offset(i as isize)).strand == -1 {
             let mut j = last[fr] + 3;
             while j <= (*nod.offset(i as isize)).ndx {
-                gc[fr] += is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64
-                    + is_gc(seq, j + 2) as f64;
+                gc[fr] +=
+                    is_gc(seq, j) as f64 + is_gc(seq, j + 1) as f64 + is_gc(seq, j + 2) as f64;
                 j += 3;
             }
             gsize = ((*nod.offset(i as isize)).stop_val - (*nod.offset(i as isize)).ndx).abs()
@@ -1106,9 +1068,7 @@ pub unsafe fn determine_sd_usage(tinf: *mut Training) {
         && (*tinf).rbs_wt[13] < 1.0
         && (*tinf).rbs_wt[15] < 1.0
         && ((*tinf).rbs_wt[0] >= -0.5
-            || ((*tinf).rbs_wt[22] < 2.0
-                && (*tinf).rbs_wt[24] < 2.0
-                && (*tinf).rbs_wt[27] < 2.0))
+            || ((*tinf).rbs_wt[22] < 2.0 && (*tinf).rbs_wt[24] < 2.0 && (*tinf).rbs_wt[27] < 2.0))
     {
         (*tinf).uses_sd = 0;
     }
@@ -1349,8 +1309,8 @@ pub unsafe fn train_starts_sd(
                     + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
                     >= best[fr as usize]
                 {
-                    best[fr as usize] = (*nod.offset(j as isize)).cscore
-                        + wt * (*tinf).rbs_wt[max_rb as usize];
+                    best[fr as usize] =
+                        (*nod.offset(j as isize)).cscore + wt * (*tinf).rbs_wt[max_rb as usize];
                     best[fr as usize] +=
                         wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
                     bndx[fr as usize] = j;
@@ -1416,8 +1376,8 @@ pub unsafe fn train_starts_sd(
                     + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
                     >= best[fr as usize]
                 {
-                    best[fr as usize] = (*nod.offset(j as isize)).cscore
-                        + wt * (*tinf).rbs_wt[max_rb as usize];
+                    best[fr as usize] =
+                        (*nod.offset(j as isize)).cscore + wt * (*tinf).rbs_wt[max_rb as usize];
                     best[fr as usize] +=
                         wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
                     bndx[fr as usize] = j;
@@ -1499,24 +1459,19 @@ pub unsafe fn train_starts_sd(
                         (*tinf).ups_comp[i][j] =
                             ((*tinf).ups_comp[i][j] * 2.0 / (1.0 - (*tinf).gc)).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
                     }
                 } else if (*tinf).gc <= 0.1 {
                     if j == 0 || j == 3 {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
                     }
                 } else {
                     if j == 0 || j == 3 {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
                     }
                 }
                 if (*tinf).ups_comp[i][j] > 4.0 {
@@ -1693,8 +1648,8 @@ pub unsafe fn train_starts_nonsd(
                     + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
                     >= best[fr as usize]
                 {
-                    best[fr as usize] = (*nod.offset(j as isize)).cscore
-                        + wt * (*nod.offset(j as isize)).mot.score;
+                    best[fr as usize] =
+                        (*nod.offset(j as isize)).cscore + wt * (*nod.offset(j as isize)).mot.score;
                     best[fr as usize] +=
                         wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
                     bndx[fr as usize] = j;
@@ -1745,8 +1700,8 @@ pub unsafe fn train_starts_nonsd(
                     + wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize]
                     >= best[fr as usize]
                 {
-                    best[fr as usize] = (*nod.offset(j as isize)).cscore
-                        + wt * (*nod.offset(j as isize)).mot.score;
+                    best[fr as usize] =
+                        (*nod.offset(j as isize)).cscore + wt * (*nod.offset(j as isize)).mot.score;
                     best[fr as usize] +=
                         wt * (*tinf).type_wt[(*nod.offset(j as isize)).type_ as usize];
                     bndx[fr as usize] = j;
@@ -1867,24 +1822,19 @@ pub unsafe fn train_starts_nonsd(
                         (*tinf).ups_comp[i][j] =
                             ((*tinf).ups_comp[i][j] * 2.0 / (1.0 - (*tinf).gc)).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / (*tinf).gc).ln();
                     }
                 } else if (*tinf).gc <= 0.1 {
                     if j == 0 || j == 3 {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
                     }
                 } else {
                     if j == 0 || j == 3 {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.10).ln();
                     } else {
-                        (*tinf).ups_comp[i][j] =
-                            ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
+                        (*tinf).ups_comp[i][j] = ((*tinf).ups_comp[i][j] * 2.0 / 0.90).ln();
                     }
                 }
                 if (*tinf).ups_comp[i][j] > 4.0 {
@@ -2109,8 +2059,8 @@ pub unsafe fn update_motif_counts(
     }
     /* Stage 1: Count only the best motif, but also count all its sub-motifs. */
     else if stage == 1 {
-        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize]
-            [(*mot).ndx as usize] += 1.0;
+        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize][(*mot).ndx as usize] +=
+            1.0;
         let mut i: c_int = 0;
         while i < (*mot).len - 3 {
             let mut j = start - (*mot).spacer - (*mot).len;
@@ -2137,8 +2087,8 @@ pub unsafe fn update_motif_counts(
     }
     /* Stage 2: Only count the highest scoring motif. */
     else if stage == 2 {
-        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize]
-            [(*mot).ndx as usize] += 1.0;
+        (*mcnt.offset(((*mot).len - 3) as isize))[(*mot).spacendx as usize][(*mot).ndx as usize] +=
+            1.0;
     }
 }
 
@@ -2243,11 +2193,7 @@ pub unsafe fn build_coverage_map(
   Intergenic modifier for connecting two genes.
 *******************************************************************************/
 
-pub unsafe fn intergenic_mod(
-    n1: *mut Node,
-    n2: *mut Node,
-    tinf: *mut Training,
-) -> f64 {
+pub unsafe fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64 {
     let mut rval: f64 = 0.0;
     let mut ovlp: f64 = 0.0;
 
@@ -2338,33 +2284,9 @@ pub unsafe fn write_start_file(
         "AGGAGG",
     ];
     static SD_SPACER: [&str; 28] = [
-        "None",
-        "3-4bp",
-        "13-15bp",
-        "13-15bp",
-        "11-12bp",
-        "3-4bp",
-        "11-12bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "13-15bp",
-        "3-4bp",
-        "11-12bp",
-        "5-10bp",
-        "5-10bp",
-        "5-10bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "3-4bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
+        "None", "3-4bp", "13-15bp", "13-15bp", "11-12bp", "3-4bp", "11-12bp", "11-12bp", "3-4bp",
+        "5-10bp", "13-15bp", "3-4bp", "11-12bp", "5-10bp", "5-10bp", "5-10bp", "5-10bp", "11-12bp",
+        "3-4bp", "5-10bp", "11-12bp", "3-4bp", "5-10bp", "3-4bp", "5-10bp", "11-12bp", "3-4bp",
         "5-10bp",
     ];
     static TYPE_STRING: [&str; 4] = ["ATG", "GTG", "TTG", "Edge"];
@@ -2397,7 +2319,8 @@ pub unsafe fn write_start_file(
     {
         let nodes_slice = std::slice::from_raw_parts_mut(nod, nn as usize);
         nodes_slice.sort_unstable_by(|a, b| {
-            a.stop_val.cmp(&b.stop_val)
+            a.stop_val
+                .cmp(&b.stop_val)
                 .then(b.strand.cmp(&a.strand))
                 .then(a.ndx.cmp(&b.ndx))
         });
@@ -2419,9 +2342,7 @@ pub unsafe fn write_start_file(
         } else {
             st_type = ni.type_;
         }
-        if ni.stop_val != prev_stop
-            || ni.strand != prev_strand
-        {
+        if ni.stop_val != prev_stop || ni.strand != prev_strand {
             prev_stop = ni.stop_val;
             prev_strand = ni.strand;
             fprint(fh, "\n");
@@ -2454,19 +2375,15 @@ pub unsafe fn write_start_file(
                 ),
             );
         }
-        rbs1 =
-            (*tinf).rbs_wt[ni.rbs[0] as usize] * (*tinf).st_wt;
-        rbs2 =
-            (*tinf).rbs_wt[ni.rbs[1] as usize] * (*tinf).st_wt;
+        rbs1 = (*tinf).rbs_wt[ni.rbs[0] as usize] * (*tinf).st_wt;
+        rbs2 = (*tinf).rbs_wt[ni.rbs[1] as usize] * (*tinf).st_wt;
         if (*tinf).uses_sd == 1 {
             if rbs1 > rbs2 {
                 fprint(
                     fh,
                     &format!(
                         "{}\t{}\t{:.2}\t",
-                        SD_STRING[ni.rbs[0] as usize],
-                        SD_SPACER[ni.rbs[0] as usize],
-                        ni.rscore,
+                        SD_STRING[ni.rbs[0] as usize], SD_SPACER[ni.rbs[0] as usize], ni.rscore,
                     ),
                 );
             } else {
@@ -2474,81 +2391,50 @@ pub unsafe fn write_start_file(
                     fh,
                     &format!(
                         "{}\t{}\t{:.2}\t",
-                        SD_STRING[ni.rbs[1] as usize],
-                        SD_SPACER[ni.rbs[1] as usize],
-                        ni.rscore,
+                        SD_STRING[ni.rbs[1] as usize], SD_SPACER[ni.rbs[1] as usize], ni.rscore,
                     ),
                 );
             }
         } else {
-            mer_text(
-                qt.as_mut_ptr(),
-                ni.mot.len,
-                ni.mot.ndx,
-            );
+            mer_text(qt.as_mut_ptr(), ni.mot.len, ni.mot.ndx);
             let qt_str = cstr(qt.as_ptr());
-            if (*tinf).no_mot > -0.5
-                && rbs1 > rbs2
-                && rbs1 > ni.mot.score * (*tinf).st_wt
-            {
+            if (*tinf).no_mot > -0.5 && rbs1 > rbs2 && rbs1 > ni.mot.score * (*tinf).st_wt {
                 fprint(
                     fh,
                     &format!(
                         "{}\t{}\t{:.2}\t",
-                        SD_STRING[ni.rbs[0] as usize],
-                        SD_SPACER[ni.rbs[0] as usize],
-                        ni.rscore,
+                        SD_STRING[ni.rbs[0] as usize], SD_SPACER[ni.rbs[0] as usize], ni.rscore,
                     ),
                 );
-            } else if (*tinf).no_mot > -0.5
-                && rbs2 >= rbs1
-                && rbs2 > ni.mot.score * (*tinf).st_wt
-            {
+            } else if (*tinf).no_mot > -0.5 && rbs2 >= rbs1 && rbs2 > ni.mot.score * (*tinf).st_wt {
                 fprint(
                     fh,
                     &format!(
                         "{}\t{}\t{:.2}\t",
-                        SD_STRING[ni.rbs[1] as usize],
-                        SD_SPACER[ni.rbs[1] as usize],
-                        ni.rscore,
+                        SD_STRING[ni.rbs[1] as usize], SD_SPACER[ni.rbs[1] as usize], ni.rscore,
                     ),
                 );
             } else {
                 if ni.mot.len == 0 {
-                    fprint(
-                        fh,
-                        &format!("None\tNone\t{:.2}\t", ni.rscore),
-                    );
+                    fprint(fh, &format!("None\tNone\t{:.2}\t", ni.rscore));
                 } else {
                     fprint(
                         fh,
-                        &format!(
-                            "{}\t{}bp\t{:.2}\t",
-                            qt_str,
-                            ni.mot.spacer,
-                            ni.rscore,
-                        ),
+                        &format!("{}\t{}bp\t{:.2}\t", qt_str, ni.mot.spacer, ni.rscore,),
                     );
                 }
             }
         }
         fprint(
             fh,
-            &format!(
-                "{:.2}\t{:.2}\t{:.3}\n",
-                ni.uscore,
-                ni.tscore,
-                ni.gc_cont,
-            ),
+            &format!("{:.2}\t{:.2}\t{:.3}\n", ni.uscore, ni.tscore, ni.gc_cont,),
         );
     }
     fprint(fh, "\n");
 
     {
         let nodes_slice = std::slice::from_raw_parts_mut(nod, nn as usize);
-        nodes_slice.sort_unstable_by(|a, b| {
-            a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand))
-        });
+        nodes_slice.sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
     }
 }
 

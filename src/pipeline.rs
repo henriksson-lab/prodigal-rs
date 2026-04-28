@@ -9,7 +9,6 @@
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_void};
-use std::os::unix::io::{FromRawFd, IntoRawFd};
 
 use crate::types::{Gene, Mask, MetagenomicBin, Node, Training};
 use crate::types::{MAX_GENES, MAX_LINE, MAX_MASKS, MAX_SEQ, NUM_META, STT_NOD};
@@ -37,105 +36,29 @@ pub struct PipelineConfig {
     pub quiet: bool,
 }
 
-use crate::reader::{seq_reader_open, seq_reader_close, seq_reader_seek};
-use crate::sequence::{read_seq_training, next_seq_multi, calc_short_header, calc_most_gc_frame, rcom_seq};
-use crate::node::{
-    add_nodes, record_gc_bias, calc_dicodon_gene, raw_coding_score, rbs_score,
-    train_starts_sd, train_starts_nonsd, determine_sd_usage, record_overlapping_starts,
-    score_nodes, reset_node_scores, write_start_file,
-};
 use crate::dprog::{dprog, eliminate_bad_genes};
-use crate::gene::{add_genes, tweak_final_starts, record_gene_data, print_genes, write_translations, write_nucleotide_seqs};
-use crate::training::{read_training_file, write_training_file};
+use crate::gene::{
+    add_genes, print_genes, record_gene_data, tweak_final_starts, write_nucleotide_seqs,
+    write_translations,
+};
 use crate::metagenomic::initialize_metagenomic_bins;
+use crate::node::{
+    add_nodes, calc_dicodon_gene, determine_sd_usage, raw_coding_score, rbs_score, record_gc_bias,
+    record_overlapping_starts, reset_node_scores, score_nodes, train_starts_nonsd, train_starts_sd,
+    write_start_file,
+};
+use crate::output::{close_handle, create_file, stdout_handle};
+use crate::reader::{seq_reader_close, seq_reader_open, seq_reader_open_stdin, seq_reader_seek};
+use crate::sequence::{
+    calc_most_gc_frame, calc_short_header, next_seq_multi, rcom_seq, read_seq_training,
+};
+use crate::training::{read_training_file, write_training_file};
 
 // ---------------------------------------------------------------------------
 // Helper: sort a Node slice by (ndx, -strand) matching compare_nodes logic
 // ---------------------------------------------------------------------------
 unsafe fn sort_nodes(nodes: &mut [Node]) {
-    nodes.sort_unstable_by(|a, b| {
-        a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand))
-    });
-}
-
-// ---------------------------------------------------------------------------
-// Helper: print full help and exit (used when stdin is a TTY with no input)
-// ---------------------------------------------------------------------------
-fn help() -> ! {
-    eprint!("\nUsage:  prodigal [-a trans_file] [-c] [-d nuc_file]");
-    eprintln!(" [-f output_type]");
-    eprint!("                 [-g tr_table] [-h] [-i input_file] [-m]");
-    eprintln!(" [-n] [-o output_file]");
-    eprint!("                 [-p mode] [-q] [-s start_file]");
-    eprintln!(" [-t training_file] [-v]");
-    eprint!("\n         -a:  Write protein translations to the selected ");
-    eprintln!("file.");
-    eprint!("         -c:  Closed ends.  Do not allow genes to run off ");
-    eprintln!("edges.");
-    eprint!("         -d:  Write nucleotide sequences of genes to the ");
-    eprintln!("selected file.");
-    eprint!("         -f:  Select output format (gbk, gff, or sco).  ");
-    eprintln!("Default is gbk.");
-    eprint!("         -g:  Specify a translation table to use (default");
-    eprintln!(" 11).");
-    eprintln!("         -h:  Print help menu and exit.");
-    eprint!("         -i:  Specify FASTA/Genbank input file (default ");
-    eprintln!("reads from stdin).");
-    eprint!("         -m:  Treat runs of N as masked sequence; don't");
-    eprintln!(" build genes across them.");
-    eprint!("         -n:  Bypass Shine-Dalgarno trainer and force");
-    eprintln!(" a full motif scan.");
-    eprint!("         -o:  Specify output file (default writes to ");
-    eprintln!("stdout).");
-    eprint!("         -p:  Select procedure (single or meta).  Default");
-    eprintln!(" is single.");
-    eprintln!("         -q:  Run quietly (suppress normal stderr output).");
-    eprint!("         -s:  Write all potential genes (with scores) to");
-    eprintln!(" the selected file.");
-    eprint!("         -t:  Write a training file (if none exists); ");
-    eprintln!("otherwise, read and use");
-    eprintln!("              the specified training file.");
-    eprintln!("         -v:  Print version number and exit.\n");
-    std::process::exit(0);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: copy stdin to a temp file (for piped input that needs rewinding)
-// ---------------------------------------------------------------------------
-fn copy_standard_input_to_file(path: &std::ffi::CStr, quiet: c_int) -> c_int {
-    use std::io::{BufRead, Write};
-
-    if quiet == 0 {
-        eprint!("Piped input detected, copying stdin to a tmp file...");
-    }
-
-    let path_str = match path.to_str() {
-        Ok(s) => s,
-        Err(_) => return -1,
-    };
-    let file = match std::fs::File::create(path_str) {
-        Ok(f) => f,
-        Err(_) => return -1,
-    };
-    let mut writer = std::io::BufWriter::new(file);
-    let stdin = std::io::stdin();
-    let reader = stdin.lock();
-    for line in reader.lines() {
-        match line {
-            Ok(l) => {
-                if writeln!(writer, "{}", l).is_err() {
-                    return -1;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-
-    if quiet == 0 {
-        eprintln!("done!");
-        eprintln!("-------------------------------------");
-    }
-    0
+    nodes.sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 }
 
 // ---------------------------------------------------------------------------
@@ -144,12 +67,30 @@ fn copy_standard_input_to_file(path: &std::ffi::CStr, quiet: c_int) -> c_int {
 #[allow(unused_assignments)]
 pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     // Convert config file paths to CStrings for FFI
-    let input_cstr = config.input_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
-    let output_cstr = config.output_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
-    let trans_cstr = config.trans_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
-    let nuc_cstr = config.nuc_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
-    let start_cstr = config.start_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
-    let train_cstr = config.train_file.as_ref().map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let input_cstr = config
+        .input_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let output_cstr = config
+        .output_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let trans_cstr = config
+        .trans_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let nuc_cstr = config
+        .nuc_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let start_cstr = config
+        .start_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
+    let train_cstr = config
+        .train_file
+        .as_ref()
+        .map(|s| std::ffi::CString::new(s.as_str()).unwrap());
 
     // Variable declarations
     let mut rv: c_int;
@@ -169,7 +110,6 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     let is_meta: c_int = config.is_meta as c_int;
     let mut num_seq: c_int;
     let quiet: c_int = config.quiet as c_int;
-    let mut piped: c_int;
     let mut max_slen: c_int;
     let mut max_score: f64;
     let mut gc: f64 = 0.0;
@@ -181,11 +121,10 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     let start_file: *const c_char = start_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
     let trans_file: *const c_char = trans_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
     let nuc_file: *const c_char = nuc_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-    let mut input_file: *const c_char = input_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-    let output_file: *const c_char = output_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
-
-    let input_copy_string = format!("tmp.prodigal.stdin.{}", std::process::id());
-    let input_copy_cstr = std::ffi::CString::new(input_copy_string.as_str()).unwrap();
+    let input_file: *const c_char = input_cstr.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+    let output_file: *const c_char = output_cstr
+        .as_ref()
+        .map_or(std::ptr::null(), |c| c.as_ptr());
 
     let mut cur_header: [c_char; MAX_LINE] = [0; MAX_LINE];
     let mut new_header: [c_char; MAX_LINE] = [0; MAX_LINE];
@@ -219,11 +158,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     // We collect the raw pointers so we can free them at the end.
     let mut meta_tinf_ptrs: Vec<*mut Training> = Vec::with_capacity(NUM_META);
     for i in 0..NUM_META {
-        std::ptr::copy_nonoverlapping(
-            b"None\0".as_ptr(),
-            meta[i].desc.as_mut_ptr() as *mut u8,
-            5,
-        );
+        std::ptr::copy_nonoverlapping(b"None\0".as_ptr(), meta[i].desc.as_mut_ptr() as *mut u8, 5);
         let ptr = Box::into_raw(Box::new(std::mem::zeroed::<Training>()));
         meta[i].tinf = ptr;
         meta_tinf_ptrs.push(ptr);
@@ -239,11 +174,10 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     max_phase = 0;
     max_score = -100.0;
     do_training = 0;
-    piped = 0;
     max_slen = 0;
 
     // Set up file descriptors (stdout = fd 1)
-    let stdout_fd: c_int = 1;
+    let stdout_fd: c_int = stdout_handle();
     start_ptr = stdout_fd;
     trans_ptr = stdout_fd;
     nuc_ptr = stdout_fd;
@@ -297,33 +231,6 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         }
     }
 
-    // Determine where standard input is coming from
-    if is_meta == 0 && train_file.is_null() && input_file.is_null() {
-        // Use std::fs::metadata on /dev/stdin to check file type
-        use std::os::unix::fs::FileTypeExt;
-        match std::fs::metadata("/dev/stdin") {
-            Err(_) => {
-                eprintln!("\nError: can't fstat standard input.\n");
-                return 5;
-            }
-            Ok(md) => {
-                let ft = md.file_type();
-                if ft.is_char_device() {
-                    help();
-                } else if ft.is_file() {
-                    // do nothing
-                } else if ft.is_fifo() {
-                    piped = 1;
-                    if copy_standard_input_to_file(&input_copy_cstr, quiet) == -1 {
-                        eprintln!("\nError: can't copy stdin to file.\n");
-                        return 5;
-                    }
-                    input_file = input_copy_cstr.as_ptr();
-                }
-            }
-        }
-    }
-
     // Check i/o files and prepare them for reading/writing
     if !input_file.is_null() {
         input_ptr = seq_reader_open(input_file);
@@ -334,9 +241,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         }
     }
     if input_ptr.is_null() {
-        input_ptr = seq_reader_open(
-            b"/dev/stdin\0".as_ptr() as *const c_char,
-        );
+        input_ptr = seq_reader_open_stdin();
         if input_ptr.is_null() {
             eprintln!("\nError: can't open stdin.\n");
             return 5;
@@ -344,30 +249,50 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     }
     if !output_file.is_null() {
         let path = CStr::from_ptr(output_file).to_string_lossy();
-        match std::fs::File::create(path.as_ref()) {
-            Ok(f) => { output_ptr = f.into_raw_fd(); }
-            Err(_) => { eprintln!("\nError: can't open output file {}.\n", path); return 6; }
+        match create_file(path.as_ref()) {
+            Ok(handle) => {
+                output_ptr = handle;
+            }
+            Err(_) => {
+                eprintln!("\nError: can't open output file {}.\n", path);
+                return 6;
+            }
         }
     }
     if !start_file.is_null() {
         let path = CStr::from_ptr(start_file).to_string_lossy();
-        match std::fs::File::create(path.as_ref()) {
-            Ok(f) => { start_ptr = f.into_raw_fd(); }
-            Err(_) => { eprintln!("\nError: can't open start file {}.\n", path); return 7; }
+        match create_file(path.as_ref()) {
+            Ok(handle) => {
+                start_ptr = handle;
+            }
+            Err(_) => {
+                eprintln!("\nError: can't open start file {}.\n", path);
+                return 7;
+            }
         }
     }
     if !trans_file.is_null() {
         let path = CStr::from_ptr(trans_file).to_string_lossy();
-        match std::fs::File::create(path.as_ref()) {
-            Ok(f) => { trans_ptr = f.into_raw_fd(); }
-            Err(_) => { eprintln!("\nError: can't open translation file {}.\n", path); return 8; }
+        match create_file(path.as_ref()) {
+            Ok(handle) => {
+                trans_ptr = handle;
+            }
+            Err(_) => {
+                eprintln!("\nError: can't open translation file {}.\n", path);
+                return 8;
+            }
         }
     }
     if !nuc_file.is_null() {
         let path = CStr::from_ptr(nuc_file).to_string_lossy();
-        match std::fs::File::create(path.as_ref()) {
-            Ok(f) => { nuc_ptr = f.into_raw_fd(); }
-            Err(_) => { eprintln!("\nError: can't open gene nucleotide file {}.\n", path); return 16; }
+        match create_file(path.as_ref()) {
+            Ok(handle) => {
+                nuc_ptr = handle;
+            }
+            Err(_) => {
+                eprintln!("\nError: can't open gene nucleotide file {}.\n", path);
+                return 16;
+            }
         }
     }
 
@@ -512,13 +437,16 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 }
                 seq_reader_close(input_ptr);
                 if output_ptr != stdout_fd {
-                    drop(std::fs::File::from_raw_fd(output_ptr));
+                    close_handle(output_ptr);
                 }
                 if start_ptr != stdout_fd {
-                    drop(std::fs::File::from_raw_fd(start_ptr));
+                    close_handle(start_ptr);
                 }
                 if trans_ptr != stdout_fd {
-                    drop(std::fs::File::from_raw_fd(trans_ptr));
+                    close_handle(trans_ptr);
+                }
+                if nuc_ptr != stdout_fd {
+                    close_handle(nuc_ptr);
                 }
                 return 0;
             }
@@ -528,7 +456,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         if quiet == 0 {
             eprintln!("-------------------------------------");
         }
-        if seq_reader_seek(input_ptr, 0, 0) == -1 {  // SEEK_SET = 0
+        if seq_reader_seek(input_ptr, 0, 0) == -1 {
+            // SEEK_SET = 0
             eprintln!("\nError: could not rewind input file.");
             return 13;
         }
@@ -569,12 +498,20 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     {
         let s = std::ffi::CString::new("Prodigal_Seq_1").unwrap();
         let bytes = s.as_bytes_with_nul();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, cur_header.as_mut_ptr(), bytes.len());
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr() as *const c_char,
+            cur_header.as_mut_ptr(),
+            bytes.len(),
+        );
     }
     {
         let s = std::ffi::CString::new("Prodigal_Seq_2").unwrap();
         let bytes = s.as_bytes_with_nul();
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, new_header.as_mut_ptr(), bytes.len());
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr() as *const c_char,
+            new_header.as_mut_ptr(),
+            bytes.len(),
+        );
     }
 
     loop {
@@ -732,9 +669,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                     );
                     sort_nodes(&mut nodes_vec[..nn as usize]);
                 }
-                if (*meta[mi as usize].tinf).gc < low
-                    || (*meta[mi as usize].tinf).gc > high
-                {
+                if (*meta[mi as usize].tinf).gc < low || (*meta[mi as usize].tinf).gc > high {
                     continue;
                 }
                 reset_node_scores(nodes, nn);
@@ -860,11 +795,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         slen = 0;
         ipath = 0;
         nmask = 0;
-        std::ptr::copy_nonoverlapping(
-            new_header.as_ptr(),
-            cur_header.as_mut_ptr(),
-            MAX_LINE,
-        );
+        std::ptr::copy_nonoverlapping(new_header.as_ptr(), cur_header.as_mut_ptr(), MAX_LINE);
         {
             let s = format!("Prodigal_Seq_{}\n", num_seq + 1);
             let c = std::ffi::CString::new(s).unwrap();
@@ -890,25 +821,16 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     // Close all filehandles
     seq_reader_close(input_ptr);
     if output_ptr != stdout_fd {
-        drop(std::fs::File::from_raw_fd(output_ptr));
+        close_handle(output_ptr);
     }
     if start_ptr != stdout_fd {
-        drop(std::fs::File::from_raw_fd(start_ptr));
+        close_handle(start_ptr);
     }
     if trans_ptr != stdout_fd {
-        drop(std::fs::File::from_raw_fd(trans_ptr));
+        close_handle(trans_ptr);
     }
     if nuc_ptr != stdout_fd {
-        drop(std::fs::File::from_raw_fd(nuc_ptr));
-    }
-
-    // Remove tmp file
-    if piped == 1 {
-        let path_str = input_copy_cstr.to_str().unwrap_or("");
-        if std::fs::remove_file(path_str).is_err() {
-            eprintln!("Could not delete tmp file {}.", path_str);
-            return 18;
-        }
+        close_handle(nuc_ptr);
     }
 
     0

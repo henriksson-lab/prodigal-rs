@@ -13,16 +13,12 @@ use std::os::raw::{c_char, c_int};
 use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SAM_OVLP, STOP};
 
 use crate::node::intergenic_mod;
-use crate::sequence::{is_a, is_c, is_g, is_t, is_n, amino, mer_text};
+use crate::sequence::{amino, is_a, is_c, is_g, is_n, is_t, mer_text};
 
 /// Write a Rust string to a file descriptor.
 #[inline]
 unsafe fn fprint(fd: c_int, s: &str) {
-    use std::io::Write;
-    use std::os::unix::io::FromRawFd;
-    let mut f = std::fs::File::from_raw_fd(fd);
-    let _ = f.write_all(s.as_bytes());
-    std::mem::forget(f); // don't close the fd
+    let _ = crate::output::write_to_handle(fd, s);
 }
 
 /// Convert a *const c_char (C string) to a &str.  Returns "" on null.
@@ -63,11 +59,7 @@ unsafe fn append_to_cbuf(buf: &mut [c_char], s: &str) {
 }
 
 /// Copies genes from the dynamic programming to a final array.
-pub unsafe fn add_genes(
-    glist: *mut Gene,
-    nod: *mut Node,
-    dbeg: c_int,
-) -> c_int {
+pub unsafe fn add_genes(glist: *mut Gene, nod: *mut Node, dbeg: c_int) -> c_int {
     if dbeg == -1 {
         return 0;
     }
@@ -189,8 +181,7 @@ pub unsafe fn tweak_final_starts(
                 && nj.strand == 1
                 && (*nod.offset((*genes.offset((i - 1) as isize)).start_ndx as isize)).strand == 1
             {
-                if (*nod.offset((*genes.offset((i - 1) as isize)).stop_ndx as isize)).ndx
-                    - nj.ndx
+                if (*nod.offset((*genes.offset((i - 1) as isize)).stop_ndx as isize)).ndx - nj.ndx
                     > MAX_SAM_OVLP
                 {
                     continue;
@@ -203,11 +194,9 @@ pub unsafe fn tweak_final_starts(
             }
             if i > 0
                 && nj.strand == 1
-                && (*nod.offset((*genes.offset((i - 1) as isize)).start_ndx as isize)).strand
-                    == -1
+                && (*nod.offset((*genes.offset((i - 1) as isize)).start_ndx as isize)).strand == -1
             {
-                if (*nod.offset((*genes.offset((i - 1) as isize)).start_ndx as isize)).ndx
-                    - nj.ndx
+                if (*nod.offset((*genes.offset((i - 1) as isize)).start_ndx as isize)).ndx - nj.ndx
                     >= 0
                 {
                     continue;
@@ -222,8 +211,7 @@ pub unsafe fn tweak_final_starts(
                 && nj.strand == -1
                 && (*nod.offset((*genes.offset((i + 1) as isize)).start_ndx as isize)).strand == 1
             {
-                if nj.ndx
-                    - (*nod.offset((*genes.offset((i + 1) as isize)).start_ndx as isize)).ndx
+                if nj.ndx - (*nod.offset((*genes.offset((i + 1) as isize)).start_ndx as isize)).ndx
                     >= 0
                 {
                     continue;
@@ -236,11 +224,9 @@ pub unsafe fn tweak_final_starts(
             }
             if i < ng - 1
                 && nj.strand == -1
-                && (*nod.offset((*genes.offset((i + 1) as isize)).start_ndx as isize)).strand
-                    == -1
+                && (*nod.offset((*genes.offset((i + 1) as isize)).start_ndx as isize)).strand == -1
             {
-                if nj.ndx
-                    - (*nod.offset((*genes.offset((i + 1) as isize)).stop_ndx as isize)).ndx
+                if nj.ndx - (*nod.offset((*genes.offset((i + 1) as isize)).stop_ndx as isize)).ndx
                     > MAX_SAM_OVLP
                 {
                     continue;
@@ -328,18 +314,13 @@ pub unsafe fn tweak_final_starts(
                 mndx = j;
             }
         }
-        if mndx != -1
-            && (*nod.offset(maxndx[mndx as usize] as isize)).strand == 1
-        {
+        if mndx != -1 && (*nod.offset(maxndx[mndx as usize] as isize)).strand == 1 {
             (*genes.offset(i as isize)).start_ndx = maxndx[mndx as usize];
             (*genes.offset(i as isize)).begin =
                 (*nod.offset(maxndx[mndx as usize] as isize)).ndx + 1;
-        } else if mndx != -1
-            && (*nod.offset(maxndx[mndx as usize] as isize)).strand == -1
-        {
+        } else if mndx != -1 && (*nod.offset(maxndx[mndx as usize] as isize)).strand == -1 {
             (*genes.offset(i as isize)).start_ndx = maxndx[mndx as usize];
-            (*genes.offset(i as isize)).end =
-                (*nod.offset(maxndx[mndx as usize] as isize)).ndx + 1;
+            (*genes.offset(i as isize)).end = (*nod.offset(maxndx[mndx as usize] as isize)).ndx + 1;
         }
     }
 }
@@ -385,33 +366,9 @@ pub unsafe fn record_gene_data(
     ];
 
     let sd_spacer: [&str; 28] = [
-        "None",
-        "3-4bp",
-        "13-15bp",
-        "13-15bp",
-        "11-12bp",
-        "3-4bp",
-        "11-12bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "13-15bp",
-        "3-4bp",
-        "11-12bp",
-        "5-10bp",
-        "5-10bp",
-        "5-10bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
-        "5-10bp",
-        "3-4bp",
-        "5-10bp",
-        "11-12bp",
-        "3-4bp",
+        "None", "3-4bp", "13-15bp", "13-15bp", "11-12bp", "3-4bp", "11-12bp", "11-12bp", "3-4bp",
+        "5-10bp", "13-15bp", "3-4bp", "11-12bp", "5-10bp", "5-10bp", "5-10bp", "5-10bp", "11-12bp",
+        "3-4bp", "5-10bp", "11-12bp", "3-4bp", "5-10bp", "3-4bp", "5-10bp", "11-12bp", "3-4bp",
         "5-10bp",
     ];
 
@@ -427,25 +384,27 @@ pub unsafe fn record_gene_data(
         let sn = &*nod.offset(sndx as isize);
 
         // Record basic gene data
-        let partial_left: c_int = if (n.edge == 1 && n.strand == 1)
-            || (sn.edge == 1 && n.strand == -1)
-        {
-            1
-        } else {
-            0
-        };
-        let partial_right: c_int = if (sn.edge == 1 && n.strand == 1)
-            || (n.edge == 1 && n.strand == -1)
-        {
-            1
-        } else {
-            0
-        };
+        let partial_left: c_int =
+            if (n.edge == 1 && n.strand == 1) || (sn.edge == 1 && n.strand == -1) {
+                1
+            } else {
+                0
+            };
+        let partial_right: c_int =
+            if (sn.edge == 1 && n.strand == 1) || (n.edge == 1 && n.strand == -1) {
+                1
+            } else {
+                0
+            };
         let st_type: c_int = if n.edge == 1 { 3 } else { n.type_ };
 
         let s = format!(
             "ID={}_{};partial={}{};start_type={};",
-            sctr, i + 1, partial_left, partial_right, type_string[st_type as usize]
+            sctr,
+            i + 1,
+            partial_left,
+            partial_right,
+            type_string[st_type as usize]
         );
         copy_to_cbuf(&mut gi.gene_data, &s);
 
@@ -470,19 +429,13 @@ pub unsafe fn record_gene_data(
         } else {
             mer_text(qt.as_mut_ptr(), n.mot.len, n.mot.ndx);
             let qt_str = cstr(qt.as_ptr());
-            if (*tinf).no_mot > -0.5
-                && rbs1 > rbs2
-                && rbs1 > n.mot.score * (*tinf).st_wt
-            {
+            if (*tinf).no_mot > -0.5 && rbs1 > rbs2 && rbs1 > n.mot.score * (*tinf).st_wt {
                 let s = format!(
                     "rbs_motif={};rbs_spacer={}",
                     sd_string[n.rbs[0] as usize], sd_spacer[n.rbs[0] as usize]
                 );
                 append_to_cbuf(&mut gi.gene_data, &s);
-            } else if (*tinf).no_mot > -0.5
-                && rbs2 >= rbs1
-                && rbs2 > n.mot.score * (*tinf).st_wt
-            {
+            } else if (*tinf).no_mot > -0.5 && rbs2 >= rbs1 && rbs2 > n.mot.score * (*tinf).st_wt {
                 let s = format!(
                     "rbs_motif={};rbs_spacer={}",
                     sd_string[n.rbs[1] as usize], sd_spacer[n.rbs[1] as usize]
@@ -491,10 +444,7 @@ pub unsafe fn record_gene_data(
             } else if n.mot.len == 0 {
                 append_to_cbuf(&mut gi.gene_data, "rbs_motif=None;rbs_spacer=None");
             } else {
-                let s = format!(
-                    "rbs_motif={};rbs_spacer={}bp",
-                    qt_str, n.mot.spacer
-                );
+                let s = format!("rbs_motif={};rbs_spacer={}bp", qt_str, n.mot.spacer);
                 append_to_cbuf(&mut gi.gene_data, &s);
             }
         }
@@ -505,7 +455,12 @@ pub unsafe fn record_gene_data(
         let confidence = calculate_confidence(n.cscore + n.sscore, (*tinf).st_wt);
         let s = format!(
             "conf={:.2};score={:.2};cscore={:.2};sscore={:.2};rscore={:.2};uscore={:.2};",
-            confidence, n.cscore + n.sscore, n.cscore, n.sscore, n.rscore, n.uscore
+            confidence,
+            n.cscore + n.sscore,
+            n.cscore,
+            n.sscore,
+            n.rscore,
+            n.uscore
         );
         copy_to_cbuf(&mut gi.score_data, &s);
 
@@ -595,14 +550,21 @@ pub unsafe fn print_genes(
             if flag == 0 {
                 fprint(fp, &format!("     CDS             {}..{}\n", left, right));
                 fprint(fp, "                     ");
-                fprint(fp, &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str));
+                fprint(
+                    fp,
+                    &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str),
+                );
             }
             if flag == 1 {
                 fprint(
                     fp,
                     &format!(
                         "gene_prodigal={}|1|f|y|y|3|0|{}|{}|{}|{}|-1|-1|1.0\n",
-                        i + 1, gi.begin, gi.end, gi.begin, gi.end
+                        i + 1,
+                        gi.begin,
+                        gi.end,
+                        gi.begin,
+                        gi.end
                     ),
                 );
             }
@@ -643,7 +605,10 @@ pub unsafe fn print_genes(
                     &format!("     CDS             complement({}..{})\n", left, right),
                 );
                 fprint(fp, "                     ");
-                fprint(fp, &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str));
+                fprint(
+                    fp,
+                    &format!("/note=\"{};{}\"\n", gene_data_str, score_data_str),
+                );
             }
             if flag == 1 {
                 fprint(
@@ -710,7 +675,11 @@ pub unsafe fn write_translations(
                 fh,
                 &format!(
                     ">{}_{} # {} # {} # 1 # {}\n",
-                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                    short_hdr_str,
+                    i + 1,
+                    gi.begin,
+                    gi.end,
+                    gene_data_str
                 ),
             );
             let mut j = gi.begin;
@@ -736,7 +705,11 @@ pub unsafe fn write_translations(
                 fh,
                 &format!(
                     ">{}_{} # {} # {} # -1 # {}\n",
-                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                    short_hdr_str,
+                    i + 1,
+                    gi.begin,
+                    gi.end,
+                    gene_data_str
                 ),
             );
             let mut j = slen + 1 - gi.end;
@@ -788,7 +761,11 @@ pub unsafe fn write_nucleotide_seqs(
                 fh,
                 &format!(
                     ">{}_{} # {} # {} # 1 # {}\n",
-                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                    short_hdr_str,
+                    i + 1,
+                    gi.begin,
+                    gi.end,
+                    gene_data_str
                 ),
             );
             let mut j = gi.begin - 1;
@@ -817,7 +794,11 @@ pub unsafe fn write_nucleotide_seqs(
                 fh,
                 &format!(
                     ">{}_{} # {} # {} # -1 # {}\n",
-                    short_hdr_str, i + 1, gi.begin, gi.end, gene_data_str
+                    short_hdr_str,
+                    i + 1,
+                    gi.begin,
+                    gi.end,
+                    gene_data_str
                 ),
             );
             let mut j = slen - gi.end;
