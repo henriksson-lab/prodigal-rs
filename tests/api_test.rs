@@ -143,11 +143,25 @@ fn test_meta_predictor_preserves_reverse_edge_starts() {
 
     let predictor = MetaPredictor::new().unwrap();
     for (seq, begin, end) in cases {
-        let genes = predictor.predict(seq).unwrap();
+        for genes in [predict_meta(seq).unwrap(), predictor.predict(seq).unwrap()] {
+            assert_eq!(genes.len(), 1);
+            assert_eq!((genes[0].begin, genes[0].end), (begin, end));
+            assert_eq!(genes[0].strand, Strand::Reverse);
+            assert_eq!(genes[0].start_codon, StartCodon::Edge);
+            assert_eq!(genes[0].partial, (true, true));
+        }
+    }
+}
+
+#[test]
+fn test_meta_predictor_preserves_reverse_internal_starts() {
+    let seq = b"GGCTTTCGGAAAGCATTCCATGAGCGCGGGGTAGCCACCCGTATCCAGCGCTGAGTTAGCGATACCTACGCACACTGCCAGACCGTAGGCGAGAGTTAAATTCGGGCAAGCGGGAATACCAAAGAAGAATAGCAGATACATTATTACTGCCATTAATATCACCGCCCGACGACCAAACTTATCGGAGATCACACCGAAGAATAAAATACTGATCAATCGCCCCAAACCGATACCGGAAATTAAGTAGGCAATGCCCGCGTTGTCAGTGGAAAACTTTTCCGCCAGAGATGACATATTTTGGGCAAGCGTAATAACACTAATGCCGTGCAGGAAGTAGCTGAAGTAAATACAAAGAACAGCCAGGATAAATGGCGTGCTGAAAGCCTTATTTTGAGACATTTTCACAGCTCCTTGCTGAAAGATAATTTCGTTAC";
+    let predictor = MetaPredictor::new().unwrap();
+    for genes in [predict_meta(seq).unwrap(), predictor.predict(seq).unwrap()] {
         assert_eq!(genes.len(), 1);
-        assert_eq!((genes[0].begin, genes[0].end), (begin, end));
+        assert_eq!((genes[0].begin, genes[0].end), (1, 399));
         assert_eq!(genes[0].strand, Strand::Reverse);
-        assert_eq!(genes[0].start_codon, StartCodon::Edge);
+        assert_eq!(genes[0].start_codon, StartCodon::ATG);
         assert_eq!(genes[0].partial, (true, false));
     }
 }

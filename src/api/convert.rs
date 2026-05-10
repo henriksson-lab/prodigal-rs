@@ -48,7 +48,7 @@ pub(crate) unsafe fn gene_to_predicted(
     gene: &Gene,
     nodes: *const Node,
     tinf: &Training,
-    seq_len: usize,
+    _seq_len: usize,
 ) -> PredictedGene {
     let n = &*nodes.offset(gene.start_ndx as isize);
     let sn = &*nodes.offset(gene.stop_ndx as isize);
@@ -61,16 +61,10 @@ pub(crate) unsafe fn gene_to_predicted(
 
     let partial_left = (n.edge == 1 && n.strand == 1) || (sn.edge == 1 && n.strand == -1);
     let partial_right = (sn.edge == 1 && n.strand == 1) || (n.edge == 1 && n.strand == -1);
-
-    let reverse_edge_start = n.strand == -1 && partial_left && n.edge == 0;
     let begin = gene.begin as usize;
-    let end = if reverse_edge_start {
-        seq_len - ((seq_len - begin + 1) % 3)
-    } else {
-        gene.end as usize
-    };
+    let end = gene.end as usize;
 
-    let start_codon = if n.edge == 1 || reverse_edge_start {
+    let start_codon = if n.edge == 1 {
         StartCodon::Edge
     } else {
         match n.type_ {

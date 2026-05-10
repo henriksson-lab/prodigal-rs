@@ -4,7 +4,7 @@ Pure Rust translation of [Prodigal](https://github.com/hyattpd/Prodigal) — a p
 
 Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
 
-* 2026-05-10 - 3 bugs fixed in a renewed audit
+* 2026-05-10 - 4 bugs fixed in a renewed audit
 * 2026-04-23 - Code is ready for testing on real data, but stay vigilant for remaining errors. Compare with regular Prodigal on your data before considering this as a replacement. 
 * This translation is only marginally faster than the original
 

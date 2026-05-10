@@ -104,7 +104,9 @@ fn predict_meta_inner(
     }
 
     let mut max_score: f64 = -100.0;
-    let mut max_phase: usize = 0;
+    let mut best_nodes = Vec::new();
+    let mut best_genes: Vec<crate::types::Gene> = Vec::new();
+    let mut best_tinf: Option<Training> = None;
     let mut nn: c_int = 0;
     unsafe {
         for i in 0..NUM_META {
@@ -149,58 +151,34 @@ fn predict_meta_inner(
             }
 
             if buf.nodes[ipath as usize].score > max_score {
-                max_phase = i;
                 max_score = buf.nodes[ipath as usize].score;
                 eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
                 let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
                 tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
-                record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
+
+                best_nodes = buf.nodes[..nn as usize].to_vec();
+                best_genes = buf.genes[..ng as usize].to_vec();
+                best_tinf = Some((*tinf).clone());
             }
         }
 
-        // Re-run the best model so Gene records and node-derived metadata come
-        // from the same phase, matching the C CLI and MetaPredictor path.
-        buf.clear_nodes(nn);
-        let tinf = &mut *models[max_phase];
-        nn = add_nodes(
-            buf.seq.as_mut_ptr(),
-            buf.rseq.as_mut_ptr(),
-            slen,
-            buf.nodes.as_mut_ptr(),
-            closed,
-            buf.masks.as_mut_ptr(),
-            buf.nmask,
-            tinf,
-        );
-        buf.nodes[..nn as usize]
-            .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
-        reset_node_scores(buf.nodes.as_mut_ptr(), nn);
-        score_nodes(
-            buf.seq.as_mut_ptr(),
-            buf.rseq.as_mut_ptr(),
-            slen,
-            buf.nodes.as_mut_ptr(),
-            nn,
-            tinf,
-            closed,
+        let Some(mut tinf) = best_tinf else {
+            return Ok(Vec::new());
+        };
+        record_gene_data(
+            best_genes.as_mut_ptr(),
+            best_genes.len() as c_int,
+            best_nodes.as_mut_ptr(),
+            &mut tinf,
             1,
         );
-        record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
-        let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
-        if ipath < 0 || ipath >= nn {
-            return Ok(Vec::new());
-        }
-        eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
-        let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
-        tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
-        record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
 
-        let mut result = Vec::with_capacity(ng as usize);
-        for i in 0..ng {
+        let mut result = Vec::with_capacity(best_genes.len());
+        for gene in &best_genes {
             result.push(gene_to_predicted(
-                &buf.genes[i as usize],
-                buf.nodes.as_ptr(),
-                tinf,
+                gene,
+                best_nodes.as_ptr(),
+                &tinf,
                 slen as usize,
             ));
         }

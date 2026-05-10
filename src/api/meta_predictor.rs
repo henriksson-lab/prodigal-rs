@@ -1,13 +1,13 @@
-//! Reusable metagenomic gene predictor with parallel model evaluation.
+//! Reusable metagenomic gene predictor.
 //!
 //! Caches the 50 metagenomic models and uses a rayon thread pool
-//! to score qualifying models in parallel.
+//! with a large stack for prediction.
 
 use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::os::raw::c_int;
 use std::sync::Arc;
 
-use rayon::{prelude::*, ThreadPool};
+use rayon::ThreadPool;
 
 use super::convert::gene_to_predicted;
 use super::encode::SequenceBuffer;
@@ -28,8 +28,8 @@ use crate::node::{add_nodes, record_overlapping_starts, reset_node_scores, score
 
 /// Reusable metagenomic gene predictor.
 ///
-/// Pre-loads 50 metagenomic models and evaluates qualifying models
-/// in parallel using a rayon thread pool with large stacks.
+/// Pre-loads 50 metagenomic models and evaluates qualifying models with
+/// Prodigal-compatible state preservation across adjacent model bins.
 pub struct MetaPredictor {
     pool: Arc<ThreadPool>,
     models: Arc<Vec<Box<Training>>>,
@@ -204,103 +204,74 @@ fn predict_parallel(
         }
     }
 
-    // Phase 2: Score all qualifying models in parallel.
-    // Each task gets its own copy of the node array.
-    // Safety: seq/rseq buffers are immutable during parallel scoring,
-    // and the usize round-trip preserves the pointer value.
-    let seq_addr = buf.seq.as_ptr() as usize;
-    let rseq_addr = buf.rseq.as_ptr() as usize;
-
-    struct ModelScore {
-        phase: usize,
-        score: f64,
-    }
-
-    let best = groups
-        .par_iter()
-        .flat_map(|group| {
-            group.model_indices.par_iter().map(|&model_idx| {
-                let mut nodes = group.nodes.clone();
-                let nn = group.nn;
-                // Clone the Training struct for this thread (needed for mutable API)
-                let mut tinf = (*models[model_idx]).clone();
-
-                unsafe {
-                    reset_node_scores(nodes.as_mut_ptr(), nn);
-                    score_nodes(
-                        seq_addr as *mut u8,
-                        rseq_addr as *mut u8,
-                        slen,
-                        nodes.as_mut_ptr(),
-                        nn,
-                        &mut tinf,
-                        closed,
-                        1,
-                    );
-                    record_overlapping_starts(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-                    let ipath = dprog(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-                    if ipath < 0 || ipath >= nn {
-                        return ModelScore {
-                            phase: model_idx,
-                            score: f64::NEG_INFINITY,
-                        };
-                    }
-                    ModelScore {
-                        phase: model_idx,
-                        score: nodes[ipath as usize].score,
-                    }
-                }
-            })
-        })
-        .reduce(
-            || ModelScore {
-                phase: 0,
-                score: f64::NEG_INFINITY,
-            },
-            |a, b| if a.score >= b.score { a } else { b },
-        );
-
-    if best.score == f64::NEG_INFINITY {
-        return Ok(Vec::new());
-    }
-
-    // Phase 3: Re-run the best model to extract genes.
-    // Need to rebuild nodes for the best model's translation table.
-    let mut tinf = (*models[best.phase]).clone();
-
-    // Find the group that contains the best model to get its nodes
-    let best_group = groups
-        .iter()
-        .find(|g| g.model_indices.contains(&best.phase))
-        .unwrap();
-    let mut nodes = best_group.nodes.clone();
-    let nn = best_group.nn;
-    let mut genes: Vec<Gene> = vec![unsafe { std::mem::zeroed() }; MAX_GENES];
+    let mut best_score = f64::NEG_INFINITY;
+    let mut best_nodes = Vec::new();
+    let mut best_genes: Vec<Gene> = Vec::new();
+    let mut best_tinf: Option<Training> = None;
 
     unsafe {
-        reset_node_scores(nodes.as_mut_ptr(), nn);
-        score_nodes(
-            buf.seq.as_mut_ptr(),
-            buf.rseq.as_mut_ptr(),
-            slen,
-            nodes.as_mut_ptr(),
-            nn,
+        for group in groups.iter_mut() {
+            for &model_idx in &group.model_indices {
+                let mut tinf = (*models[model_idx]).clone();
+                reset_node_scores(group.nodes.as_mut_ptr(), group.nn);
+                score_nodes(
+                    buf.seq.as_mut_ptr(),
+                    buf.rseq.as_mut_ptr(),
+                    slen,
+                    group.nodes.as_mut_ptr(),
+                    group.nn,
+                    &mut tinf,
+                    closed,
+                    1,
+                );
+                record_overlapping_starts(group.nodes.as_mut_ptr(), group.nn, &mut tinf, 1);
+                let ipath = dprog(group.nodes.as_mut_ptr(), group.nn, &mut tinf, 1);
+                if ipath < 0 || ipath >= group.nn {
+                    continue;
+                }
+
+                let score = group.nodes[ipath as usize].score;
+                if score > best_score {
+                    best_score = score;
+                    eliminate_bad_genes(group.nodes.as_mut_ptr(), ipath, &mut tinf);
+
+                    let mut genes: Vec<Gene> = vec![std::mem::zeroed(); MAX_GENES];
+                    let ng = add_genes(genes.as_mut_ptr(), group.nodes.as_mut_ptr(), ipath);
+                    tweak_final_starts(
+                        genes.as_mut_ptr(),
+                        ng,
+                        group.nodes.as_mut_ptr(),
+                        group.nn,
+                        &mut tinf,
+                    );
+                    genes.truncate(ng as usize);
+
+                    best_nodes = group.nodes.clone();
+                    best_genes = genes;
+                    best_tinf = Some(tinf);
+                }
+            }
+        }
+    }
+
+    let Some(mut tinf) = best_tinf else {
+        return Ok(Vec::new());
+    };
+
+    unsafe {
+        record_gene_data(
+            best_genes.as_mut_ptr(),
+            best_genes.len() as c_int,
+            best_nodes.as_mut_ptr(),
             &mut tinf,
-            closed,
             1,
         );
-        record_overlapping_starts(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-        let ipath = dprog(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-        eliminate_bad_genes(nodes.as_mut_ptr(), ipath, &mut tinf);
-        let ng = add_genes(genes.as_mut_ptr(), nodes.as_mut_ptr(), ipath);
-        tweak_final_starts(genes.as_mut_ptr(), ng, nodes.as_mut_ptr(), nn, &mut tinf);
-        record_gene_data(genes.as_mut_ptr(), ng, nodes.as_mut_ptr(), &mut tinf, 1);
 
-        let mut result = Vec::with_capacity(ng as usize);
-        for i in 0..ng {
+        let mut result = Vec::with_capacity(best_genes.len());
+        for gene in &best_genes {
             result.push(gene_to_predicted(
-                &genes[i as usize],
-                nodes.as_ptr(),
+                gene,
+                best_nodes.as_ptr(),
                 &tinf,
                 slen as usize,
             ));
