@@ -1,45 +1,54 @@
-
-use crate::types::{Gene, Node, Training};
 use super::types::{PredictedGene, StartCodon, Strand};
+use crate::gene::calculate_confidence;
+use crate::types::{Gene, Node, Training};
 
 // SD motif/spacer lookup tables (same as gene.rs record_gene_data)
 const SD_STRING: [&str; 28] = [
-    "None", "GGA/GAG/AGG", "3Base/5BMM", "4Base/6BMM",
-    "AGxAG", "AGxAG", "GGA/GAG/AGG", "GGxGG",
-    "GGxGG", "AGxAG", "AGGAG(G)/GGAGG", "AGGA/GGAG/GAGG",
-    "AGGA/GGAG/GAGG", "GGA/GAG/AGG", "GGxGG", "AGGA",
-    "GGAG/GAGG", "AGxAGG/AGGxGG", "AGxAGG/AGGxGG", "AGxAGG/AGGxGG",
-    "AGGAG/GGAGG", "AGGAG", "AGGAG", "GGAGG",
-    "GGAGG", "AGGAGG", "AGGAGG", "AGGAGG",
+    "None",
+    "GGA/GAG/AGG",
+    "3Base/5BMM",
+    "4Base/6BMM",
+    "AGxAG",
+    "AGxAG",
+    "GGA/GAG/AGG",
+    "GGxGG",
+    "GGxGG",
+    "AGxAG",
+    "AGGAG(G)/GGAGG",
+    "AGGA/GGAG/GAGG",
+    "AGGA/GGAG/GAGG",
+    "GGA/GAG/AGG",
+    "GGxGG",
+    "AGGA",
+    "GGAG/GAGG",
+    "AGxAGG/AGGxGG",
+    "AGxAGG/AGGxGG",
+    "AGxAGG/AGGxGG",
+    "AGGAG/GGAGG",
+    "AGGAG",
+    "AGGAG",
+    "GGAGG",
+    "GGAGG",
+    "AGGAGG",
+    "AGGAGG",
+    "AGGAGG",
 ];
 
 const SD_SPACER: [&str; 28] = [
-    "None", "3-4bp", "13-15bp", "13-15bp",
-    "11-12bp", "3-4bp", "11-12bp", "11-12bp",
-    "3-4bp", "5-10bp", "13-15bp", "3-4bp",
-    "11-12bp", "5-10bp", "5-10bp", "5-10bp",
-    "5-10bp", "11-12bp", "3-4bp", "5-10bp",
-    "11-12bp", "3-4bp", "5-10bp", "3-4bp",
-    "5-10bp", "11-12bp", "3-4bp", "5-10bp",
+    "None", "3-4bp", "13-15bp", "13-15bp", "11-12bp", "3-4bp", "11-12bp", "11-12bp", "3-4bp",
+    "5-10bp", "13-15bp", "3-4bp", "11-12bp", "5-10bp", "5-10bp", "5-10bp", "5-10bp", "11-12bp",
+    "3-4bp", "5-10bp", "11-12bp", "3-4bp", "5-10bp", "3-4bp", "5-10bp", "11-12bp", "3-4bp",
+    "5-10bp",
 ];
 
 use crate::sequence::mer_text;
-
-fn calc_confidence(score: f64, start_weight: f64) -> f64 {
-    let conf = if score / start_weight < 41.0 {
-        let e = (score / start_weight).exp();
-        (e / (e + 1.0)) * 100.0
-    } else {
-        99.99
-    };
-    if conf <= 50.0 { 50.0 } else { conf }
-}
 
 /// Convert internal Gene + Node data to a PredictedGene.
 pub(crate) unsafe fn gene_to_predicted(
     gene: &Gene,
     nodes: *const Node,
     tinf: &Training,
+    seq_len: usize,
 ) -> PredictedGene {
     let n = &*nodes.offset(gene.start_ndx as isize);
     let sn = &*nodes.offset(gene.stop_ndx as isize);
@@ -53,7 +62,15 @@ pub(crate) unsafe fn gene_to_predicted(
     let partial_left = (n.edge == 1 && n.strand == 1) || (sn.edge == 1 && n.strand == -1);
     let partial_right = (sn.edge == 1 && n.strand == 1) || (n.edge == 1 && n.strand == -1);
 
-    let start_codon = if n.edge == 1 {
+    let reverse_edge_start = n.strand == -1 && partial_left && n.edge == 0;
+    let begin = gene.begin as usize;
+    let end = if reverse_edge_start {
+        seq_len - ((seq_len - begin + 1) % 3)
+    } else {
+        gene.end as usize
+    };
+
+    let start_codon = if n.edge == 1 || reverse_edge_start {
         StartCodon::Edge
     } else {
         match n.type_ {
@@ -78,7 +95,10 @@ pub(crate) unsafe fn gene_to_predicted(
         // Non-SD mode: check if SD motif beats upstream motif
         if tinf.no_mot > -0.5 && rbs1_score > rbs2_score && rbs1_score > n.mot.score * tinf.st_wt {
             (SD_STRING[n.rbs[0] as usize], SD_SPACER[n.rbs[0] as usize])
-        } else if tinf.no_mot > -0.5 && rbs2_score >= rbs1_score && rbs2_score > n.mot.score * tinf.st_wt {
+        } else if tinf.no_mot > -0.5
+            && rbs2_score >= rbs1_score
+            && rbs2_score > n.mot.score * tinf.st_wt
+        {
             (SD_STRING[n.rbs[1] as usize], SD_SPACER[n.rbs[1] as usize])
         } else if n.mot.len == 0 {
             ("None", "None")
@@ -92,15 +112,16 @@ pub(crate) unsafe fn gene_to_predicted(
                 .to_string();
             let spacer = format!("{}bp", n.mot.spacer);
             return PredictedGene {
-                begin: gene.begin as usize,
-                end: gene.end as usize,
+                begin,
+                end,
                 strand,
                 start_codon,
+                translation_table: tinf.trans_table as u8,
                 partial: (partial_left, partial_right),
                 rbs_motif: motif,
                 rbs_spacer: spacer,
                 gc_content: n.gc_cont,
-                confidence: calc_confidence(n.cscore + n.sscore, tinf.st_wt),
+                confidence: calculate_confidence(n.cscore + n.sscore, tinf.st_wt),
                 score: n.cscore + n.sscore,
                 cscore: n.cscore,
                 sscore: n.sscore,
@@ -112,15 +133,16 @@ pub(crate) unsafe fn gene_to_predicted(
     };
 
     PredictedGene {
-        begin: gene.begin as usize,
-        end: gene.end as usize,
+        begin,
+        end,
         strand,
         start_codon,
+        translation_table: tinf.trans_table as u8,
         partial: (partial_left, partial_right),
         rbs_motif: rbs_motif.to_string(),
         rbs_spacer: rbs_spacer.to_string(),
         gc_content: n.gc_cont,
-        confidence: calc_confidence(n.cscore + n.sscore, tinf.st_wt),
+        confidence: calculate_confidence(n.cscore + n.sscore, tinf.st_wt),
         score: n.cscore + n.sscore,
         cscore: n.cscore,
         sscore: n.sscore,

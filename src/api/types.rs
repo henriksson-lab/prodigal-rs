@@ -45,6 +45,8 @@ pub struct PredictedGene {
     pub strand: Strand,
     /// Start codon type.
     pub start_codon: StartCodon,
+    /// Translation table used for this gene.
+    pub translation_table: u8,
     /// Whether left/right ends are partial (run off sequence edges).
     pub partial: (bool, bool),
     /// RBS motif name (e.g. "AGGAG" or "None").

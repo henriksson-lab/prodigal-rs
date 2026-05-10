@@ -17,8 +17,10 @@ fn get_c_sizes() -> Vec<(String, usize)> {
     // Compile the C size-check program
     let status = Command::new("gcc")
         .args([
-            "-o", &out_bin,
-            "-xc", "-", // read from stdin
+            "-o",
+            &out_bin,
+            "-xc",
+            "-", // read from stdin
             &format!("-I{}", c_src),
             "-DSUPPORT_GZIP_COMPRESSED",
         ])
@@ -27,7 +29,8 @@ fn get_c_sizes() -> Vec<(String, usize)> {
         .and_then(|mut child| {
             use std::io::Write;
             let stdin = child.stdin.as_mut().unwrap();
-            stdin.write_all(br#"
+            stdin.write_all(
+                br#"
                 #include <stdio.h>
                 #include "training.h"
                 #include "node.h"
@@ -43,7 +46,8 @@ fn get_c_sizes() -> Vec<(String, usize)> {
                     printf("_metagenomic_bin %zu\n", sizeof(struct _metagenomic_bin));
                     return 0;
                 }
-            "#)?;
+            "#,
+            )?;
             child.wait()
         })
         .expect("Failed to compile C size-check program");

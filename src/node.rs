@@ -1902,7 +1902,6 @@ pub unsafe fn score_upstream_composition(
             continue;
         }
         if start - i < 0 {
-            count += 1;
             continue;
         }
         (*nod).uscore +=

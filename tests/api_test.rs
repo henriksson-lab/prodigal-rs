@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use prodigal_rs::{
-    predict, predict_meta, train, MetaPredictor, ProdigalConfig, Strand,
+    predict, predict_meta, train, MetaPredictor, ProdigalConfig, StartCodon, Strand,
     META_PREDICTOR_STACK_SIZE,
 };
 
@@ -82,12 +82,13 @@ fn test_predict_meta_all_sequences() {
     for (name, seq) in &seqs {
         let genes = predict_meta(seq).unwrap();
         total_genes += genes.len();
-        eprintln!(
-            "  {} ({} bp): {} genes",
-            name, seq.len(), genes.len()
-        );
+        eprintln!("  {} ({} bp): {} genes", name, seq.len(), genes.len());
     }
-    eprintln!("[meta all] total: {} genes across {} sequences", total_genes, seqs.len());
+    eprintln!(
+        "[meta all] total: {} genes across {} sequences",
+        total_genes,
+        seqs.len()
+    );
     assert!(total_genes > 0);
 }
 
@@ -121,6 +122,50 @@ fn test_meta_predictor_accepts_shared_thread_pool() {
 }
 
 #[test]
+fn test_meta_predictor_preserves_reverse_edge_starts() {
+    let cases = [
+        (
+            b"ATCGACTGATGTTCATATTCGCTGCCGATATAAACCTGCGCCGCCACCGCGCAACTGTTCAGGCGCACGGCGTCATCCATCGATAACGCCACGG".as_slice(),
+            3,
+            92,
+        ),
+        (
+            b"CCAGAGAAGTCAGTGGGTTACGCAGAGAATCGTAACGGGATACCAGATCAAGAGCCTGTCCAATGTGCATAAAAAAATCCGGAAACAA".as_slice(),
+            2,
+            88,
+        ),
+        (
+            b"ACCCGGCAACGGCAAAGGCCGCGAGAATACCGACGACTGTTGCGATAAGCAGACGGTGGAACATAGTGCGCAGATCCGGATAGATGTGTAGATGATGCATG".as_slice(),
+            2,
+            100,
+        ),
+    ];
+
+    let predictor = MetaPredictor::new().unwrap();
+    for (seq, begin, end) in cases {
+        let genes = predictor.predict(seq).unwrap();
+        assert_eq!(genes.len(), 1);
+        assert_eq!((genes[0].begin, genes[0].end), (begin, end));
+        assert_eq!(genes[0].strand, Strand::Reverse);
+        assert_eq!(genes[0].start_codon, StartCodon::Edge);
+        assert_eq!(genes[0].partial, (true, false));
+    }
+}
+
+#[test]
+fn test_meta_predictor_reports_selected_translation_table() {
+    let seq = b"ATTATTCAGCCTGGTGATAATGTGACGGCAGAGCAAATGATAGCTTCATGAAAAGCTGACTTCGCAATAAGCGCGCAAGAAAATGTAACGTTGGCTCGTGTGGA";
+    let genes = MetaPredictor::new().unwrap().predict(seq).unwrap();
+
+    assert_eq!(genes.len(), 1);
+    assert_eq!((genes[0].begin, genes[0].end), (1, 102));
+    assert_eq!(genes[0].strand, Strand::Forward);
+    assert_eq!(genes[0].start_codon, StartCodon::Edge);
+    assert_eq!(genes[0].partial, (true, true));
+    assert_eq!(genes[0].translation_table, 4);
+}
+
+#[test]
 fn test_train_and_predict() {
     let seqs = load_sample_sequences();
     let all = concat_sequences(&seqs);
@@ -139,10 +184,7 @@ fn test_train_and_predict() {
     for (name, seq) in &seqs {
         let genes = predict(seq, &training).unwrap();
         total_genes += genes.len();
-        eprintln!(
-            "  {} ({} bp): {} genes",
-            name, seq.len(), genes.len()
-        );
+        eprintln!("  {} ({} bp): {} genes", name, seq.len(), genes.len());
     }
     eprintln!("[single] total: {} genes", total_genes);
     assert!(total_genes > 0);
@@ -225,7 +267,10 @@ fn test_custom_config() {
     let genes = prodigal_rs::predict_meta_with(seq, &config).unwrap();
     // With closed ends, edge genes are suppressed
     for g in &genes {
-        assert!(!g.partial.0 && !g.partial.1, "closed_ends should prevent partial genes");
+        assert!(
+            !g.partial.0 && !g.partial.1,
+            "closed_ends should prevent partial genes"
+        );
     }
 }
 
@@ -253,10 +298,18 @@ fn load_fasta_contigs(path: &std::path::Path, max_bp: usize) -> Vec<(String, Vec
                 contigs.push((name.clone(), seq.clone()));
                 seq.clear();
             }
-            name = line[1..].split_whitespace().next().unwrap_or("").to_string();
+            name = line[1..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string();
         } else {
             if max_bp == 0 || seq.len() < max_bp {
-                let remaining = if max_bp == 0 { usize::MAX } else { max_bp - seq.len() };
+                let remaining = if max_bp == 0 {
+                    usize::MAX
+                } else {
+                    max_bp - seq.len()
+                };
                 let bytes = line.trim().as_bytes();
                 seq.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
             }
@@ -275,7 +328,8 @@ const TEST_SEQ_LIMIT: usize = 100_000;
 /// Load a FASTA file into a single sequence (concatenating all contigs).
 fn load_fasta_sequence(path: &std::path::Path) -> Vec<u8> {
     let content = std::fs::read_to_string(path).unwrap();
-    content.lines()
+    content
+        .lines()
         .filter(|l| !l.starts_with('>'))
         .flat_map(|l| l.trim().bytes())
         .collect()
@@ -291,7 +345,10 @@ fn test_prokka_plasmid_meta_coordinates() {
     let plasmid_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../prokka-rs/prokka/test/plasmid.fna");
     if !plasmid_path.exists() {
-        eprintln!("Skipping: prokka plasmid test data not found at {}", plasmid_path.display());
+        eprintln!(
+            "Skipping: prokka plasmid test data not found at {}",
+            plasmid_path.display()
+        );
         return;
     }
 
@@ -375,18 +432,27 @@ fn test_prokka_plasmid_meta_coordinates() {
     ];
 
     assert_eq!(
-        genes.len(), reference.len(),
+        genes.len(),
+        reference.len(),
         "Gene count mismatch: got {} expected {} (C Prodigal reference)",
-        genes.len(), reference.len()
+        genes.len(),
+        reference.len()
     );
 
     let mut mismatches = 0;
-    for (i, (gene, (ref_begin, ref_end, ref_strand))) in genes.iter().zip(reference.iter()).enumerate() {
+    for (i, (gene, (ref_begin, ref_end, ref_strand))) in
+        genes.iter().zip(reference.iter()).enumerate()
+    {
         if gene.begin != *ref_begin || gene.end != *ref_end || gene.strand != *ref_strand {
             eprintln!(
                 "Gene {}: got {}..{} {} expected {}..{} {}",
-                i + 1, gene.begin, gene.end, gene.strand,
-                ref_begin, ref_end, ref_strand
+                i + 1,
+                gene.begin,
+                gene.end,
+                gene.strand,
+                ref_begin,
+                ref_end,
+                ref_strand
             );
             mismatches += 1;
         }
@@ -418,7 +484,12 @@ fn test_prokka_genome_meta_mode() {
         let genes = predict_meta(seq).unwrap();
         total_genes += genes.len();
         total_bp += seq.len();
-        eprintln!("  [meta] {} ({} bp): {} genes", name, seq.len(), genes.len());
+        eprintln!(
+            "  [meta] {} ({} bp): {} genes",
+            name,
+            seq.len(),
+            genes.len()
+        );
 
         // Basic sanity on every gene
         for g in &genes {
@@ -451,7 +522,10 @@ fn test_prokka_genome_single_mode() {
     }
 
     let contigs = load_fasta_contigs(&path, TEST_SEQ_LIMIT);
-    let all: Vec<u8> = contigs.iter().flat_map(|(_, s)| s.iter().copied()).collect();
+    let all: Vec<u8> = contigs
+        .iter()
+        .flat_map(|(_, s)| s.iter().copied())
+        .collect();
 
     let training = train(&all).unwrap();
     eprintln!(
@@ -468,7 +542,12 @@ fn test_prokka_genome_single_mode() {
     for (name, seq) in &contigs {
         let genes = predict(seq, &training).unwrap();
         total_genes += genes.len();
-        eprintln!("  [single] {} ({} bp): {} genes", name, seq.len(), genes.len());
+        eprintln!(
+            "  [single] {} ({} bp): {} genes",
+            name,
+            seq.len(),
+            genes.len()
+        );
     }
     eprintln!("[prokka genome single] {} total genes", total_genes);
     assert!(
@@ -484,7 +563,10 @@ fn test_prokka_genome_single_mode() {
 fn test_priestia_megaterium_meta_mode() {
     let path = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
     if !path.exists() {
-        eprintln!("Skipping: Priestia megaterium genome not found at {}", path.display());
+        eprintln!(
+            "Skipping: Priestia megaterium genome not found at {}",
+            path.display()
+        );
         return;
     }
 
@@ -495,7 +577,12 @@ fn test_priestia_megaterium_meta_mode() {
     for (name, seq) in &contigs {
         let genes = predict_meta(seq).unwrap();
         total_genes += genes.len();
-        eprintln!("  [meta] {} ({} bp): {} genes", name, seq.len(), genes.len());
+        eprintln!(
+            "  [meta] {} ({} bp): {} genes",
+            name,
+            seq.len(),
+            genes.len()
+        );
 
         for g in &genes {
             assert!(g.begin >= 1 && g.end >= 1);
@@ -519,12 +606,18 @@ fn test_priestia_megaterium_meta_mode() {
 fn test_priestia_megaterium_single_mode() {
     let path = sibling_repo_path("gecco-rs/data/CP157504.1.fna");
     if !path.exists() {
-        eprintln!("Skipping: Priestia megaterium genome not found at {}", path.display());
+        eprintln!(
+            "Skipping: Priestia megaterium genome not found at {}",
+            path.display()
+        );
         return;
     }
 
     let contigs = load_fasta_contigs(&path, TEST_SEQ_LIMIT);
-    let all: Vec<u8> = contigs.iter().flat_map(|(_, s)| s.iter().copied()).collect();
+    let all: Vec<u8> = contigs
+        .iter()
+        .flat_map(|(_, s)| s.iter().copied())
+        .collect();
 
     let training = train(&all).unwrap();
     eprintln!(
@@ -539,7 +632,12 @@ fn test_priestia_megaterium_single_mode() {
     for (name, seq) in &contigs {
         let genes = predict(seq, &training).unwrap();
         total_genes += genes.len();
-        eprintln!("  [single] {} ({} bp): {} genes", name, seq.len(), genes.len());
+        eprintln!(
+            "  [single] {} ({} bp): {} genes",
+            name,
+            seq.len(),
+            genes.len()
+        );
     }
     eprintln!("[priestia single] {} total genes", total_genes);
     assert!(
@@ -556,8 +654,14 @@ fn test_meta_vs_single_gene_count_consistency() {
     // Use real genomes for this comparison — short sequences (< 100 kb)
     // don't have enough genes for a meaningful ratio comparison.
     let test_files: Vec<(&str, std::path::PathBuf)> = vec![
-        ("prokka-genome", sibling_repo_path("prokka-rs/prokka/test/genome.fna")),
-        ("priestia", sibling_repo_path("gecco-rs/data/CP157504.1.fna")),
+        (
+            "prokka-genome",
+            sibling_repo_path("prokka-rs/prokka/test/genome.fna"),
+        ),
+        (
+            "priestia",
+            sibling_repo_path("gecco-rs/data/CP157504.1.fna"),
+        ),
     ];
 
     let mut tested = 0;
@@ -567,7 +671,10 @@ fn test_meta_vs_single_gene_count_consistency() {
             continue;
         }
         let contigs = load_fasta_contigs(path, TEST_SEQ_LIMIT);
-        let all: Vec<u8> = contigs.iter().flat_map(|(_, s)| s.iter().copied()).collect();
+        let all: Vec<u8> = contigs
+            .iter()
+            .flat_map(|(_, s)| s.iter().copied())
+            .collect();
         let training = train(&all).unwrap();
 
         for (name, seq) in &contigs {
@@ -581,14 +688,21 @@ fn test_meta_vs_single_gene_count_consistency() {
             let ratio = meta_genes.len() as f64 / single_genes.len() as f64;
             eprintln!(
                 "  [{}] {} meta={} single={} ratio={:.2}",
-                label, name, meta_genes.len(), single_genes.len(), ratio
+                label,
+                name,
+                meta_genes.len(),
+                single_genes.len(),
+                ratio
             );
 
             // On large genomes, meta and single should agree within 10%
             assert!(
                 ratio > 0.8 && ratio < 1.2,
                 "Gene count ratio {:.2} for {} is too divergent (meta={}, single={})",
-                ratio, name, meta_genes.len(), single_genes.len()
+                ratio,
+                name,
+                meta_genes.len(),
+                single_genes.len()
             );
             tested += 1;
         }
@@ -621,19 +735,31 @@ fn test_gene_coordinates_within_sequence_bounds() {
                 assert!(
                     end <= seq.len(),
                     "[{}] {} gene {} end ({}) exceeds sequence length ({})",
-                    mode, name, i, end, seq.len()
+                    mode,
+                    name,
+                    i,
+                    end,
+                    seq.len()
                 );
                 assert!(
                     start >= 1,
                     "[{}] {} gene {} start ({}) is less than 1",
-                    mode, name, i, start
+                    mode,
+                    name,
+                    i,
+                    start
                 );
                 // Gene length should be a multiple of 3 (codon-aligned)
                 let len = end - start + 1;
                 assert!(
                     len % 3 == 0,
                     "[{}] {} gene {} length {} is not divisible by 3 ({}..{})",
-                    mode, name, i, len, start, end
+                    mode,
+                    name,
+                    i,
+                    len,
+                    start,
+                    end
                 );
             }
         }
@@ -657,7 +783,11 @@ fn test_genes_are_mostly_non_overlapping() {
         let mut reverse: Vec<(usize, usize)> = Vec::new();
 
         for g in &genes {
-            let (s, e) = if g.begin < g.end { (g.begin, g.end) } else { (g.end, g.begin) };
+            let (s, e) = if g.begin < g.end {
+                (g.begin, g.end)
+            } else {
+                (g.end, g.begin)
+            };
             match g.strand {
                 Strand::Forward => forward.push((s, e)),
                 Strand::Reverse => reverse.push((s, e)),
@@ -679,7 +809,9 @@ fn test_genes_are_mostly_non_overlapping() {
             assert!(
                 big_overlaps == 0,
                 "[{}] {} strand has {} large overlaps (>60bp)",
-                name, strand_name, big_overlaps
+                name,
+                strand_name,
+                big_overlaps
             );
         }
     }

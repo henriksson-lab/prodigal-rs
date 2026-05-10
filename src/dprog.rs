@@ -18,8 +18,8 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 *******************************************************************************/
 
+use crate::types::{Node, Training, MAX_NODE_DIST, MAX_OPP_OVLP, STOP};
 use std::os::raw::c_int;
-use crate::types::{Node, Training, STOP, MAX_OPP_OVLP, MAX_NODE_DIST};
 
 use crate::node::intergenic_mod;
 
@@ -30,12 +30,7 @@ use crate::node::intergenic_mod;
   routine does the final dynamic programming based on coding, RBS scores, etc.
 *******************************************************************************/
 
-pub unsafe fn dprog(
-    nod: *mut Node,
-    nn: c_int,
-    tinf: *mut Training,
-    flag: c_int,
-) -> c_int {
+pub unsafe fn dprog(nod: *mut Node, nn: c_int, tinf: *mut Training, flag: c_int) -> c_int {
     let mut min: c_int;
     let mut max_ndx: c_int = -1;
     let mut max_sc: f64 = -1.0;
@@ -135,6 +130,10 @@ pub unsafe fn dprog(
             while (*nod.offset(ii as isize)).ndx != (*nod.offset(path as isize)).stop_val {
                 ii -= 1;
             }
+            if ii < 0 {
+                path = nxt;
+                continue;
+            }
             (*nod.offset(path as isize)).traceb = ii;
             (*nod.offset(ii as isize)).traceb = nxt;
         }
@@ -143,8 +142,8 @@ pub unsafe fn dprog(
             && (*nod.offset(nxt as isize)).strand == 1
             && (*nod.offset(nxt as isize)).type_ == STOP
         {
-            (*nod.offset(path as isize)).traceb =
-                (*nod.offset(nxt as isize)).star_ptr[((*nod.offset(path as isize)).ndx % 3) as usize];
+            (*nod.offset(path as isize)).traceb = (*nod.offset(nxt as isize)).star_ptr
+                [((*nod.offset(path as isize)).ndx % 3) as usize];
             (*nod.offset((*nod.offset(path as isize)).traceb as isize)).traceb = nxt;
         }
         if (*nod.offset(path as isize)).strand == -1
@@ -152,8 +151,8 @@ pub unsafe fn dprog(
             && (*nod.offset(nxt as isize)).strand == -1
             && (*nod.offset(nxt as isize)).type_ == STOP
         {
-            (*nod.offset(path as isize)).traceb =
-                (*nod.offset(path as isize)).star_ptr[((*nod.offset(nxt as isize)).ndx % 3) as usize];
+            (*nod.offset(path as isize)).traceb = (*nod.offset(path as isize)).star_ptr
+                [((*nod.offset(nxt as isize)).ndx % 3) as usize];
             (*nod.offset((*nod.offset(path as isize)).traceb as isize)).traceb = nxt;
         }
         path = (*nod.offset(path as isize)).traceb;
@@ -209,22 +208,16 @@ pub unsafe fn score_connection(
     if (*n1).type_ != STOP && (*n2).type_ != STOP && (*n1).strand == (*n2).strand {
         return;
     }
-
     /* 5'fwd->5'rev, 5'fwd->3'rev */
     else if (*n1).strand == 1 && (*n1).type_ != STOP && (*n2).strand == -1 {
         return;
     }
-
     /* 3'rev->5'fwd, 3'rev->3'fwd) */
     else if (*n1).strand == -1 && (*n1).type_ == STOP && (*n2).strand == 1 {
         return;
     }
-
     /* 5'rev->3'fwd */
-    else if (*n1).strand == -1
-        && (*n1).type_ != STOP
-        && (*n2).strand == 1
-        && (*n2).type_ == STOP
+    else if (*n1).strand == -1 && (*n1).type_ != STOP && (*n2).strand == 1 && (*n2).type_ == STOP
     {
         return;
     }
@@ -238,7 +231,6 @@ pub unsafe fn score_connection(
     if (*n1).traceb == -1 && (*n1).strand == -1 && (*n1).type_ != STOP {
         return;
     }
-
     /*********/
     /* Genes */
     /*********/
@@ -264,7 +256,6 @@ pub unsafe fn score_connection(
             score = (*n1).cscore + (*n1).sscore;
         }
     }
-
     /* 3'rev->5'rev */
     else if (*n1).strand == (*n2).strand
         && (*n1).strand == -1
@@ -286,17 +277,12 @@ pub unsafe fn score_connection(
             score = (*n2).cscore + (*n2).sscore;
         }
     }
-
     /********************************/
     /* Intergenic Space (Noncoding) */
     /********************************/
 
     /* 3'fwd->5'fwd */
-    else if (*n1).strand == 1
-        && (*n1).type_ == STOP
-        && (*n2).strand == 1
-        && (*n2).type_ != STOP
-    {
+    else if (*n1).strand == 1 && (*n1).type_ == STOP && (*n2).strand == 1 && (*n2).type_ != STOP {
         left += 2;
         if left >= right {
             return;
@@ -305,12 +291,8 @@ pub unsafe fn score_connection(
             score = intergenic_mod(n1, n2, tinf);
         }
     }
-
     /* 3'fwd->3'rev */
-    else if (*n1).strand == 1
-        && (*n1).type_ == STOP
-        && (*n2).strand == -1
-        && (*n2).type_ == STOP
+    else if (*n1).strand == 1 && (*n1).type_ == STOP && (*n2).strand == -1 && (*n2).type_ == STOP
     {
         left += 2;
         right -= 2;
@@ -338,8 +320,7 @@ pub unsafe fn score_connection(
             if ovlp >= (*n3).stop_val - (*nod.offset((*n1).traceb as isize)).ndx - 2 {
                 continue;
             }
-            if (flag == 1
-                && (*n3).cscore + (*n3).sscore + intergenic_mod(n3, n2, tinf) > maxval)
+            if (flag == 1 && (*n3).cscore + (*n3).sscore + intergenic_mod(n3, n2, tinf) > maxval)
                 || (flag == 0
                     && (*tinf).bias[0] * (*n3).gc_score[0]
                         + (*tinf).bias[1] * (*n3).gc_score[1]
@@ -363,12 +344,8 @@ pub unsafe fn score_connection(
             score = intergenic_mod(n1, n2, tinf);
         }
     }
-
     /* 5'rev->3'rev */
-    else if (*n1).strand == -1
-        && (*n1).type_ != STOP
-        && (*n2).strand == -1
-        && (*n2).type_ == STOP
+    else if (*n1).strand == -1 && (*n1).type_ != STOP && (*n2).strand == -1 && (*n2).type_ == STOP
     {
         right -= 2;
         if left >= right {
@@ -378,12 +355,8 @@ pub unsafe fn score_connection(
             score = intergenic_mod(n1, n2, tinf);
         }
     }
-
     /* 5'rev->5'fwd */
-    else if (*n1).strand == -1
-        && (*n1).type_ != STOP
-        && (*n2).strand == 1
-        && (*n2).type_ != STOP
+    else if (*n1).strand == -1 && (*n1).type_ != STOP && (*n2).strand == 1 && (*n2).type_ != STOP
     {
         if left >= right {
             return;
@@ -392,17 +365,12 @@ pub unsafe fn score_connection(
             score = intergenic_mod(n1, n2, tinf);
         }
     }
-
     /********************/
     /* Possible Operons */
     /********************/
 
     /* 3'fwd->3'fwd, check for a start just to left of first 3' */
-    else if (*n1).strand == 1
-        && (*n2).strand == 1
-        && (*n1).type_ == STOP
-        && (*n2).type_ == STOP
-    {
+    else if (*n1).strand == 1 && (*n2).strand == 1 && (*n1).type_ == STOP && (*n2).type_ == STOP {
         if (*n2).stop_val >= (*n1).ndx {
             return;
         }
@@ -420,12 +388,8 @@ pub unsafe fn score_connection(
             score = (*n3).cscore + (*n3).sscore + intergenic_mod(n1, n3, tinf);
         }
     }
-
     /* 3'rev->3'rev, check for a start just to right of second 3' */
-    else if (*n1).strand == -1
-        && (*n1).type_ == STOP
-        && (*n2).strand == -1
-        && (*n2).type_ == STOP
+    else if (*n1).strand == -1 && (*n1).type_ == STOP && (*n2).strand == -1 && (*n2).type_ == STOP
     {
         if (*n1).stop_val <= (*n2).ndx {
             return;
@@ -444,16 +408,12 @@ pub unsafe fn score_connection(
             score = (*n3).cscore + (*n3).sscore + intergenic_mod(n3, n2, tinf);
         }
     }
-
     /***************************************/
     /* Overlapping Opposite Strand 3' Ends */
     /***************************************/
 
     /* 3'for->5'rev */
-    else if (*n1).strand == 1
-        && (*n1).type_ == STOP
-        && (*n2).strand == -1
-        && (*n2).type_ != STOP
+    else if (*n1).strand == 1 && (*n1).type_ == STOP && (*n2).strand == -1 && (*n2).type_ != STOP
     {
         if (*n2).stop_val - 2 >= (*n1).ndx + 2 {
             return;
@@ -500,11 +460,7 @@ pub unsafe fn score_connection(
   the genes and eliminates ones with negative scores.
 *******************************************************************************/
 
-pub unsafe fn eliminate_bad_genes(
-    nod: *mut Node,
-    dbeg: c_int,
-    tinf: *mut Training,
-) {
+pub unsafe fn eliminate_bad_genes(nod: *mut Node, dbeg: c_int, tinf: *mut Training) {
     let mut path: c_int;
 
     if dbeg == -1 {
@@ -515,9 +471,7 @@ pub unsafe fn eliminate_bad_genes(
         path = (*nod.offset(path as isize)).traceb;
     }
     while (*nod.offset(path as isize)).tracef != -1 {
-        if (*nod.offset(path as isize)).strand == 1
-            && (*nod.offset(path as isize)).type_ == STOP
-        {
+        if (*nod.offset(path as isize)).strand == 1 && (*nod.offset(path as isize)).type_ == STOP {
             let tracef = (*nod.offset(path as isize)).tracef;
             (*nod.offset(tracef as isize)).sscore += intergenic_mod(
                 &mut *nod.offset(path as isize),
@@ -525,9 +479,7 @@ pub unsafe fn eliminate_bad_genes(
                 tinf,
             );
         }
-        if (*nod.offset(path as isize)).strand == -1
-            && (*nod.offset(path as isize)).type_ != STOP
-        {
+        if (*nod.offset(path as isize)).strand == -1 && (*nod.offset(path as isize)).type_ != STOP {
             let tracef = (*nod.offset(path as isize)).tracef;
             (*nod.offset(path as isize)).sscore += intergenic_mod(
                 &mut *nod.offset(path as isize),
@@ -551,12 +503,9 @@ pub unsafe fn eliminate_bad_genes(
             let tracef = (*nod.offset(path as isize)).tracef;
             (*nod.offset(tracef as isize)).elim = 1;
         }
-        if (*nod.offset(path as isize)).strand == -1
-            && (*nod.offset(path as isize)).type_ == STOP
-        {
+        if (*nod.offset(path as isize)).strand == -1 && (*nod.offset(path as isize)).type_ == STOP {
             let tracef = (*nod.offset(path as isize)).tracef;
-            if (*nod.offset(tracef as isize)).cscore + (*nod.offset(tracef as isize)).sscore < 0.0
-            {
+            if (*nod.offset(tracef as isize)).cscore + (*nod.offset(tracef as isize)).sscore < 0.0 {
                 (*nod.offset(path as isize)).elim = 1;
                 (*nod.offset(tracef as isize)).elim = 1;
             }

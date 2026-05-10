@@ -1,10 +1,10 @@
 use std::os::raw::c_int;
 
-use crate::types::{Node, Training, MAX_SEQ, NUM_META};
 use super::convert::gene_to_predicted;
 use super::encode::SequenceBuffer;
 use super::training::TrainingData;
 use super::types::{PredictedGene, ProdigalConfig, ProdigalError};
+use crate::types::{Training, MAX_SEQ, NUM_META};
 
 const MIN_SINGLE_GENOME: usize = 20_000;
 const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
@@ -24,18 +24,13 @@ where
         .expect("worker thread panicked")
 }
 
-use crate::node::{
-    add_nodes, record_gc_bias, calc_dicodon_gene, raw_coding_score, rbs_score,
-    train_starts_sd, train_starts_nonsd, determine_sd_usage, record_overlapping_starts,
-    score_nodes, reset_node_scores,
-};
 use crate::dprog::{dprog, eliminate_bad_genes};
-use crate::gene::{add_genes, tweak_final_starts, record_gene_data};
+use crate::gene::{add_genes, record_gene_data, tweak_final_starts};
+use crate::node::{
+    add_nodes, calc_dicodon_gene, determine_sd_usage, raw_coding_score, rbs_score, record_gc_bias,
+    record_overlapping_starts, reset_node_scores, score_nodes, train_starts_nonsd, train_starts_sd,
+};
 use crate::sequence::calc_most_gc_frame;
-
-pub(crate) fn sort_nodes(nodes: &mut [Node]) {
-    nodes.sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
-}
 
 pub(crate) fn validate_config(config: &ProdigalConfig) -> Result<(), ProdigalError> {
     let tt = config.translation_table;
@@ -100,9 +95,13 @@ fn predict_meta_inner(
 
     // GC window for model selection
     let mut low = 0.88495 * gc - 0.0102337;
-    if low > 0.65 { low = 0.65; }
+    if low > 0.65 {
+        low = 0.65;
+    }
     let mut high = 0.86596 * gc + 0.1131991;
-    if high < 0.35 { high = 0.35; }
+    if high < 0.35 {
+        high = 0.35;
+    }
 
     let mut max_score: f64 = -100.0;
     let mut max_phase: usize = 0;
@@ -115,11 +114,17 @@ fn predict_meta_inner(
             if need_rebuild {
                 buf.clear_nodes(nn);
                 nn = add_nodes(
-                    buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-                    buf.nodes.as_mut_ptr(), closed,
-                    buf.masks.as_mut_ptr(), buf.nmask, tinf,
+                    buf.seq.as_mut_ptr(),
+                    buf.rseq.as_mut_ptr(),
+                    slen,
+                    buf.nodes.as_mut_ptr(),
+                    closed,
+                    buf.masks.as_mut_ptr(),
+                    buf.nmask,
+                    tinf,
                 );
-                sort_nodes(&mut buf.nodes[..nn as usize]);
+                buf.nodes[..nn as usize]
+                    .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
             }
 
             if tinf.gc < low || tinf.gc > high {
@@ -128,8 +133,14 @@ fn predict_meta_inner(
 
             reset_node_scores(buf.nodes.as_mut_ptr(), nn);
             score_nodes(
-                buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-                buf.nodes.as_mut_ptr(), nn, tinf, closed, 1,
+                buf.seq.as_mut_ptr(),
+                buf.rseq.as_mut_ptr(),
+                slen,
+                buf.nodes.as_mut_ptr(),
+                nn,
+                tinf,
+                closed,
+                1,
             );
             record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
             let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
@@ -141,17 +152,9 @@ fn predict_meta_inner(
                 max_phase = i;
                 max_score = buf.nodes[ipath as usize].score;
                 eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
-                let ng = add_genes(
-                    buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath,
-                );
-                tweak_final_starts(
-                    buf.genes.as_mut_ptr(), ng,
-                    buf.nodes.as_mut_ptr(), nn, tinf,
-                );
-                record_gene_data(
-                    buf.genes.as_mut_ptr(), ng,
-                    buf.nodes.as_mut_ptr(), tinf, 1,
-                );
+                let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
+                tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
+                record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
             }
         }
 
@@ -160,15 +163,27 @@ fn predict_meta_inner(
         buf.clear_nodes(nn);
         let tinf = &mut *models[max_phase];
         nn = add_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            buf.nodes.as_mut_ptr(), closed,
-            buf.masks.as_mut_ptr(), buf.nmask, tinf,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            closed,
+            buf.masks.as_mut_ptr(),
+            buf.nmask,
+            tinf,
         );
-        sort_nodes(&mut buf.nodes[..nn as usize]);
+        buf.nodes[..nn as usize]
+            .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
         reset_node_scores(buf.nodes.as_mut_ptr(), nn);
         score_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            buf.nodes.as_mut_ptr(), nn, tinf, closed, 1,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            nn,
+            tinf,
+            closed,
+            1,
         );
         record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
         let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
@@ -176,17 +191,9 @@ fn predict_meta_inner(
             return Ok(Vec::new());
         }
         eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
-        let ng = add_genes(
-            buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath,
-        );
-        tweak_final_starts(
-            buf.genes.as_mut_ptr(), ng,
-            buf.nodes.as_mut_ptr(), nn, tinf,
-        );
-        record_gene_data(
-            buf.genes.as_mut_ptr(), ng,
-            buf.nodes.as_mut_ptr(), tinf, 1,
-        );
+        let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
+        tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
+        record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
 
         let mut result = Vec::with_capacity(ng as usize);
         for i in 0..ng {
@@ -194,6 +201,7 @@ fn predict_meta_inner(
                 &buf.genes[i as usize],
                 buf.nodes.as_ptr(),
                 tinf,
+                slen as usize,
             ));
         }
         Ok(result)
@@ -209,10 +217,7 @@ pub fn train(seq: &[u8]) -> Result<TrainingData, ProdigalError> {
 }
 
 /// Train with custom settings.
-pub fn train_with(
-    seq: &[u8],
-    config: &ProdigalConfig,
-) -> Result<TrainingData, ProdigalError> {
+pub fn train_with(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, ProdigalError> {
     validate_config(config)?;
     if seq.is_empty() {
         return Err(ProdigalError::EmptySequence);
@@ -222,10 +227,7 @@ pub fn train_with(
     with_large_stack(move || train_inner(&seq, &config))
 }
 
-fn train_inner(
-    seq: &[u8],
-    config: &ProdigalConfig,
-) -> Result<TrainingData, ProdigalError> {
+fn train_inner(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, ProdigalError> {
     let mut buf = SequenceBuffer::new();
     let mut tinf = Box::new(unsafe { std::mem::zeroed::<Training>() });
     tinf.st_wt = 4.35;
@@ -248,11 +250,17 @@ fn train_inner(
     unsafe {
         // Find all potential starts and stops
         let nn = add_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            buf.nodes.as_mut_ptr(), closed,
-            buf.masks.as_mut_ptr(), buf.nmask, &mut *tinf,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            closed,
+            buf.masks.as_mut_ptr(),
+            buf.nmask,
+            &mut *tinf,
         );
-        sort_nodes(&mut buf.nodes[..nn as usize]);
+        buf.nodes[..nn as usize]
+            .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 
         // GC frame bias
         let gc_frame = calc_most_gc_frame(buf.seq.as_mut_ptr(), slen);
@@ -267,19 +275,54 @@ fn train_inner(
         let ipath = dprog(buf.nodes.as_mut_ptr(), nn, &mut *tinf, 0);
 
         // Dicodon statistics from initial gene set
-        calc_dicodon_gene(&mut *tinf, buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen, buf.nodes.as_mut_ptr(), ipath);
-        raw_coding_score(buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen, buf.nodes.as_mut_ptr(), nn, &mut *tinf);
+        calc_dicodon_gene(
+            &mut *tinf,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            ipath,
+        );
+        raw_coding_score(
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            nn,
+            &mut *tinf,
+        );
 
         // RBS and start training
-        rbs_score(buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen, buf.nodes.as_mut_ptr(), nn, &mut *tinf);
-        train_starts_sd(buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen, buf.nodes.as_mut_ptr(), nn, &mut *tinf);
+        rbs_score(
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            nn,
+            &mut *tinf,
+        );
+        train_starts_sd(
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            nn,
+            &mut *tinf,
+        );
         determine_sd_usage(&mut *tinf);
 
         if config.force_non_sd {
             tinf.uses_sd = 0;
         }
         if tinf.uses_sd == 0 {
-            train_starts_nonsd(buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen, buf.nodes.as_mut_ptr(), nn, &mut *tinf);
+            train_starts_nonsd(
+                buf.seq.as_mut_ptr(),
+                buf.rseq.as_mut_ptr(),
+                slen,
+                buf.nodes.as_mut_ptr(),
+                nn,
+                &mut *tinf,
+            );
         }
     }
 
@@ -287,10 +330,7 @@ fn train_inner(
 }
 
 /// Predict genes using pre-trained model (single-genome mode).
-pub fn predict(
-    seq: &[u8],
-    training: &TrainingData,
-) -> Result<Vec<PredictedGene>, ProdigalError> {
+pub fn predict(seq: &[u8], training: &TrainingData) -> Result<Vec<PredictedGene>, ProdigalError> {
     predict_with(seq, training, &ProdigalConfig::default())
 }
 
@@ -336,30 +376,34 @@ fn predict_inner(
 
     unsafe {
         let nn = add_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            buf.nodes.as_mut_ptr(), closed,
-            buf.masks.as_mut_ptr(), buf.nmask, tinf,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            closed,
+            buf.masks.as_mut_ptr(),
+            buf.nmask,
+            tinf,
         );
-        sort_nodes(&mut buf.nodes[..nn as usize]);
+        buf.nodes[..nn as usize]
+            .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 
         score_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            buf.nodes.as_mut_ptr(), nn, tinf, closed, 0,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            buf.nodes.as_mut_ptr(),
+            nn,
+            tinf,
+            closed,
+            0,
         );
         record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, tinf, 1);
         let ipath = dprog(buf.nodes.as_mut_ptr(), nn, tinf, 1);
         eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, tinf);
-        let ng = add_genes(
-            buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath,
-        );
-        tweak_final_starts(
-            buf.genes.as_mut_ptr(), ng,
-            buf.nodes.as_mut_ptr(), nn, tinf,
-        );
-        record_gene_data(
-            buf.genes.as_mut_ptr(), ng,
-            buf.nodes.as_mut_ptr(), tinf, 1,
-        );
+        let ng = add_genes(buf.genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
+        tweak_final_starts(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), nn, tinf);
+        record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
 
         let mut result = Vec::with_capacity(ng as usize);
         for i in 0..ng {
@@ -367,6 +411,7 @@ fn predict_inner(
                 &buf.genes[i as usize],
                 buf.nodes.as_ptr(),
                 &*tinf,
+                slen as usize,
             ));
         }
         Ok(result)
@@ -450,7 +495,9 @@ mod tests {
                             buf.nmask,
                             tinf,
                         );
-                        sort_nodes(&mut buf.nodes[..nn as usize]);
+                        buf.nodes[..nn as usize].sort_unstable_by(|a, b| {
+                            a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand))
+                        });
                     }
 
                     if tinf.gc < low || tinf.gc > high {
@@ -488,7 +535,8 @@ mod tests {
                     buf.nmask,
                     tinf,
                 );
-                sort_nodes(&mut buf.nodes[..nn as usize]);
+                buf.nodes[..nn as usize]
+                    .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
                 reset_node_scores(buf.nodes.as_mut_ptr(), nn);
                 score_nodes(
                     buf.seq.as_mut_ptr(),
@@ -508,7 +556,14 @@ mod tests {
                 record_gene_data(buf.genes.as_mut_ptr(), ng, buf.nodes.as_mut_ptr(), tinf, 1);
 
                 let rebuilt: Vec<PredictedGene> = (0..ng)
-                    .map(|i| gene_to_predicted(&buf.genes[i as usize], buf.nodes.as_ptr(), tinf))
+                    .map(|i| {
+                        gene_to_predicted(
+                            &buf.genes[i as usize],
+                            buf.nodes.as_ptr(),
+                            tinf,
+                            slen as usize,
+                        )
+                    })
                     .collect();
 
                 assert_eq!(predicted.len(), rebuilt.len());

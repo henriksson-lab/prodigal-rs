@@ -62,40 +62,45 @@ struct Cli {
     train_file: Option<String>,
 }
 
-fn parse_output_format(s: &str) -> i32 {
-    match s.to_lowercase().as_str() {
-        "0" | "gbk" => 0,
-        "1" | "gca" => 1,
-        "2" | "sco" => 2,
-        "3" | "gff" => 3,
-        _ => {
-            eprintln!("\nInvalid output format specified.");
-            process::exit(15);
-        }
-    }
-}
-
-fn parse_mode(s: &str) -> bool {
-    match s.as_bytes().first() {
-        Some(b'0') | Some(b's') | Some(b'S') => false,
-        Some(b'1') | Some(b'm') | Some(b'M') => true,
-        _ => {
-            eprintln!("\nInvalid meta/single genome type specified.");
-            process::exit(15);
-        }
-    }
-}
-
-fn validate_trans_table(tt: i32) -> i32 {
-    if tt < 1 || tt > 25 || tt == 7 || tt == 8 || (tt >= 17 && tt <= 20) {
-        eprintln!("\nInvalid translation table specified.");
-        process::exit(15);
-    }
-    tt
-}
-
 fn main() {
     let cli = Cli::parse();
+
+    let output_format = match cli.output_format.as_deref() {
+        None => 0,
+        Some(s) => match s.to_lowercase().as_str() {
+            "0" | "gbk" => 0,
+            "1" | "gca" => 1,
+            "2" | "sco" => 2,
+            "3" | "gff" => 3,
+            _ => {
+                eprintln!("\nInvalid output format specified.");
+                process::exit(15);
+            }
+        },
+    };
+
+    let trans_table = match cli.trans_table {
+        None => 0,
+        Some(tt) => {
+            if tt < 1 || tt > 25 || tt == 7 || tt == 8 || (tt >= 17 && tt <= 20) {
+                eprintln!("\nInvalid translation table specified.");
+                process::exit(15);
+            }
+            tt
+        }
+    };
+
+    let is_meta = match cli.mode.as_deref() {
+        None => false,
+        Some(s) => match s.as_bytes().first() {
+            Some(b'0') | Some(b's') | Some(b'S') => false,
+            Some(b'1') | Some(b'm') | Some(b'M') => true,
+            _ => {
+                eprintln!("\nInvalid meta/single genome type specified.");
+                process::exit(15);
+            }
+        },
+    };
 
     let config = prodigal_rs::pipeline::PipelineConfig {
         input_file: cli.input_file,
@@ -104,12 +109,12 @@ fn main() {
         nuc_file: cli.nuc_file,
         start_file: cli.start_file,
         train_file: cli.train_file,
-        output_format: cli.output_format.as_deref().map_or(0, parse_output_format),
-        trans_table: cli.trans_table.map_or(0, validate_trans_table),
+        output_format,
+        trans_table,
         closed: cli.closed,
         do_mask: cli.mask,
         force_nonsd: cli.force_nonsd,
-        is_meta: cli.mode.as_deref().map_or(false, parse_mode),
+        is_meta,
         quiet: cli.quiet,
     };
 

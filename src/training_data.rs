@@ -64,9 +64,5 @@ static METAGENOME_BLOBS: [&[u8; TRAINING_SIZE]; 50] = [
 
 /// Load metagenome training data for bin `n` (0..49) into the given pointer.
 pub unsafe fn load_metagenome(n: usize, tptr: *mut Training) {
-    ptr::copy_nonoverlapping(
-        METAGENOME_BLOBS[n].as_ptr(),
-        tptr as *mut u8,
-        TRAINING_SIZE,
-    );
+    ptr::copy_nonoverlapping(METAGENOME_BLOBS[n].as_ptr(), tptr as *mut u8, TRAINING_SIZE);
 }

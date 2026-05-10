@@ -9,12 +9,12 @@ use std::sync::Arc;
 
 use rayon::{prelude::*, ThreadPool};
 
-use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SEQ, NUM_META};
 use super::convert::gene_to_predicted;
 use super::encode::SequenceBuffer;
 use super::types::{PredictedGene, ProdigalConfig, ProdigalError};
+use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SEQ, NUM_META};
 
-use super::predict::{sort_nodes, validate_config};
+use super::predict::validate_config;
 
 /// Recommended stack size for Rayon pools used by `MetaPredictor`.
 ///
@@ -22,9 +22,9 @@ use super::predict::{sort_nodes, validate_config};
 /// default Rust thread stack can be too small for worker threads.
 pub const META_PREDICTOR_STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 
-use crate::node::{add_nodes, reset_node_scores, score_nodes, record_overlapping_starts};
 use crate::dprog::{dprog, eliminate_bad_genes};
-use crate::gene::{add_genes, tweak_final_starts, record_gene_data};
+use crate::gene::{add_genes, record_gene_data, tweak_final_starts};
+use crate::node::{add_nodes, record_overlapping_starts, reset_node_scores, score_nodes};
 
 /// Reusable metagenomic gene predictor.
 ///
@@ -49,9 +49,12 @@ impl MetaPredictor {
         let pool = rayon::ThreadPoolBuilder::new()
             .stack_size(META_PREDICTOR_STACK_SIZE)
             .build()
-            .map_err(|e| ProdigalError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other, e.to_string(),
-            )))?;
+            .map_err(|e| {
+                ProdigalError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            })?;
 
         Self::with_config_and_thread_pool(config, Arc::new(pool))
     }
@@ -77,7 +80,11 @@ impl MetaPredictor {
         validate_config(&config)?;
         let models = Arc::new(load_meta_models());
 
-        Ok(MetaPredictor { pool, models, config })
+        Ok(MetaPredictor {
+            pool,
+            models,
+            config,
+        })
     }
 
     /// Predict genes in the given sequence.
@@ -148,9 +155,13 @@ fn predict_parallel(
 
     // GC window for model selection
     let mut low = 0.88495 * gc - 0.0102337;
-    if low > 0.65 { low = 0.65; }
+    if low > 0.65 {
+        low = 0.65;
+    }
     let mut high = 0.86596 * gc + 0.1131991;
-    if high < 0.35 { high = 0.35; }
+    if high < 0.35 {
+        high = 0.35;
+    }
 
     // Phase 1: Build node arrays per translation table group,
     // filtering models by GC range.
@@ -167,13 +178,18 @@ fn predict_parallel(
             unsafe {
                 buf.clear_nodes(nn);
                 nn = add_nodes(
-                    buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-                    buf.nodes.as_mut_ptr(), closed,
-                    buf.masks.as_mut_ptr(), buf.nmask,
+                    buf.seq.as_mut_ptr(),
+                    buf.rseq.as_mut_ptr(),
+                    slen,
+                    buf.nodes.as_mut_ptr(),
+                    closed,
+                    buf.masks.as_mut_ptr(),
+                    buf.nmask,
                     &mut tinf_copy,
                 );
             }
-            sort_nodes(&mut buf.nodes[..nn as usize]);
+            buf.nodes[..nn as usize]
+                .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 
             groups.push(TransTableGroup {
                 model_indices: Vec::new(),
@@ -200,35 +216,49 @@ fn predict_parallel(
         score: f64,
     }
 
-    let best = groups.par_iter().flat_map(|group| {
-        group.model_indices.par_iter().map(|&model_idx| {
-            let mut nodes = group.nodes.clone();
-            let nn = group.nn;
-            // Clone the Training struct for this thread (needed for mutable API)
-            let mut tinf = (*models[model_idx]).clone();
+    let best = groups
+        .par_iter()
+        .flat_map(|group| {
+            group.model_indices.par_iter().map(|&model_idx| {
+                let mut nodes = group.nodes.clone();
+                let nn = group.nn;
+                // Clone the Training struct for this thread (needed for mutable API)
+                let mut tinf = (*models[model_idx]).clone();
 
-            unsafe {
-                reset_node_scores(nodes.as_mut_ptr(), nn);
-                score_nodes(
-                    seq_addr as *mut u8, rseq_addr as *mut u8, slen,
-                    nodes.as_mut_ptr(), nn, &mut tinf, closed, 1,
-                );
-                record_overlapping_starts(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-                let ipath = dprog(nodes.as_mut_ptr(), nn, &mut tinf, 1);
-                if ipath < 0 || ipath >= nn {
-                    return ModelScore { phase: model_idx, score: f64::NEG_INFINITY };
+                unsafe {
+                    reset_node_scores(nodes.as_mut_ptr(), nn);
+                    score_nodes(
+                        seq_addr as *mut u8,
+                        rseq_addr as *mut u8,
+                        slen,
+                        nodes.as_mut_ptr(),
+                        nn,
+                        &mut tinf,
+                        closed,
+                        1,
+                    );
+                    record_overlapping_starts(nodes.as_mut_ptr(), nn, &mut tinf, 1);
+                    let ipath = dprog(nodes.as_mut_ptr(), nn, &mut tinf, 1);
+                    if ipath < 0 || ipath >= nn {
+                        return ModelScore {
+                            phase: model_idx,
+                            score: f64::NEG_INFINITY,
+                        };
+                    }
+                    ModelScore {
+                        phase: model_idx,
+                        score: nodes[ipath as usize].score,
+                    }
                 }
-                ModelScore {
-                    phase: model_idx,
-                    score: nodes[ipath as usize].score,
-                }
-            }
+            })
         })
-    })
-    .reduce(
-        || ModelScore { phase: 0, score: f64::NEG_INFINITY },
-        |a, b| if a.score >= b.score { a } else { b },
-    );
+        .reduce(
+            || ModelScore {
+                phase: 0,
+                score: f64::NEG_INFINITY,
+            },
+            |a, b| if a.score >= b.score { a } else { b },
+        );
 
     if best.score == f64::NEG_INFINITY {
         return Ok(Vec::new());
@@ -239,7 +269,10 @@ fn predict_parallel(
     let mut tinf = (*models[best.phase]).clone();
 
     // Find the group that contains the best model to get its nodes
-    let best_group = groups.iter().find(|g| g.model_indices.contains(&best.phase)).unwrap();
+    let best_group = groups
+        .iter()
+        .find(|g| g.model_indices.contains(&best.phase))
+        .unwrap();
     let mut nodes = best_group.nodes.clone();
     let nn = best_group.nn;
     let mut genes: Vec<Gene> = vec![unsafe { std::mem::zeroed() }; MAX_GENES];
@@ -247,8 +280,14 @@ fn predict_parallel(
     unsafe {
         reset_node_scores(nodes.as_mut_ptr(), nn);
         score_nodes(
-            buf.seq.as_mut_ptr(), buf.rseq.as_mut_ptr(), slen,
-            nodes.as_mut_ptr(), nn, &mut tinf, closed, 1,
+            buf.seq.as_mut_ptr(),
+            buf.rseq.as_mut_ptr(),
+            slen,
+            nodes.as_mut_ptr(),
+            nn,
+            &mut tinf,
+            closed,
+            1,
         );
         record_overlapping_starts(nodes.as_mut_ptr(), nn, &mut tinf, 1);
         let ipath = dprog(nodes.as_mut_ptr(), nn, &mut tinf, 1);
@@ -259,7 +298,12 @@ fn predict_parallel(
 
         let mut result = Vec::with_capacity(ng as usize);
         for i in 0..ng {
-            result.push(gene_to_predicted(&genes[i as usize], nodes.as_ptr(), &tinf));
+            result.push(gene_to_predicted(
+                &genes[i as usize],
+                nodes.as_ptr(),
+                &tinf,
+                slen as usize,
+            ));
         }
         Ok(result)
     }

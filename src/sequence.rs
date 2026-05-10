@@ -21,9 +21,9 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_int, c_uint, c_void};
 
-use crate::types::{Mask, Training, MAX_LINE, MAX_MASKS, MAX_SEQ, MASK_SIZE, WINDOW};
+use crate::types::{Mask, Training, MASK_SIZE, MAX_LINE, MAX_MASKS, MAX_SEQ, WINDOW};
 
-use crate::bitmap::{test, set, toggle};
+use crate::bitmap::{set, test, toggle};
 use crate::reader::seq_reader_gets;
 
 /// Find the length of a NUL-terminated C string in a `*const c_char` buffer.
@@ -139,8 +139,7 @@ pub unsafe fn read_seq_training(
         }
         if line[0] == b'>' as c_char
             || (line[0] == b'S' as c_char && line[1] == b'Q' as c_char)
-            || (c_strlen(line.as_ptr()) > 6
-                && c_starts_with(line.as_ptr(), b"ORIGIN"))
+            || (c_strlen(line.as_ptr()) > 6 && c_starts_with(line.as_ptr(), b"ORIGIN"))
         {
             hdr = 1;
             if fhdr > 0 {
@@ -220,7 +219,10 @@ pub unsafe fn read_seq_training(
             }
         }
         if len + MAX_LINE as c_int >= MAX_SEQ as c_int {
-            eprintln!("\n\nWarning:  Sequence is long (max {} for training).", MAX_SEQ);
+            eprintln!(
+                "\n\nWarning:  Sequence is long (max {} for training).",
+                MAX_SEQ
+            );
             eprintln!("Training on the first {} bases.\n", MAX_SEQ);
             break;
         }
@@ -282,9 +284,7 @@ pub unsafe fn next_seq_multi(
             eprint!("{} chars, sequence might not be read ", MAX_LINE);
             eprintln!("correctly.\n");
         }
-        if c_strlen(line.as_ptr()) > 10
-            && c_starts_with(line.as_ptr(), b"DEFINITION")
-        {
+        if c_strlen(line.as_ptr()) > 10 && c_starts_with(line.as_ptr(), b"DEFINITION") {
             if genbank_end == 0 {
                 c_strcpy(cur_hdr, line.as_ptr().add(12));
                 *cur_hdr.add(c_strlen(cur_hdr) - 1) = 0;
@@ -295,8 +295,7 @@ pub unsafe fn next_seq_multi(
         }
         if line[0] == b'>' as c_char
             || (line[0] == b'S' as c_char && line[1] == b'Q' as c_char)
-            || (c_strlen(line.as_ptr()) > 6
-                && c_starts_with(line.as_ptr(), b"ORIGIN"))
+            || (c_strlen(line.as_ptr()) > 6 && c_starts_with(line.as_ptr(), b"ORIGIN"))
         {
             if reading_seq == 1 || genbank_end == 1 || *sctr > 0 {
                 if line[0] == b'>' as c_char {
@@ -310,9 +309,7 @@ pub unsafe fn next_seq_multi(
                 *cur_hdr.add(c_strlen(cur_hdr) - 1) = 0;
             }
             reading_seq = 1;
-        } else if reading_seq == 1
-            && (line[0] == b'/' as c_char && line[1] == b'/' as c_char)
-        {
+        } else if reading_seq == 1 && (line[0] == b'/' as c_char && line[1] == b'/' as c_char) {
             reading_seq = 0;
             genbank_end = 1;
         } else if reading_seq == 1 {
@@ -392,11 +389,7 @@ pub unsafe fn next_seq_multi(
 }
 
 /* Takes first word of header */
-pub unsafe fn calc_short_header(
-    header: *mut c_char,
-    short_header: *mut c_char,
-    sctr: c_int,
-) {
+pub unsafe fn calc_short_header(header: *mut c_char, short_header: *mut c_char, sctr: c_int) {
     c_strcpy(short_header, header);
     let hlen = c_strlen(header);
     let mut i = 0usize;
@@ -421,12 +414,7 @@ pub unsafe fn calc_short_header(
 /* Takes rseq and fills it up with the rev complement of seq */
 
 #[inline]
-pub unsafe fn rcom_seq(
-    seq: *mut u8,
-    rseq: *mut u8,
-    useq: *mut u8,
-    len: c_int,
-) {
+pub unsafe fn rcom_seq(seq: *mut u8, rseq: *mut u8, useq: *mut u8, len: c_int) {
     let slen = len * 2;
     for i in 0..slen {
         if test(seq, i) == 0 {
@@ -620,12 +608,7 @@ pub unsafe fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_double {
 }
 
 /* Returns a single amino acid for this position */
-pub unsafe fn amino(
-    seq: *mut u8,
-    n: c_int,
-    tinf: *mut Training,
-    is_init: c_int,
-) -> c_char {
+pub unsafe fn amino(seq: *mut u8, n: c_int, tinf: *mut Training, is_init: c_int) -> c_char {
     let tt = (*tinf).trans_table;
 
     if is_stop(seq, n, tinf) == 1 {
@@ -810,51 +793,131 @@ pub unsafe fn amino(
 /* Converts an amino acid letter to a numerical value */
 pub unsafe fn amino_num(aa: c_char) -> c_int {
     let c = aa as u8;
-    if c == b'a' || c == b'A' { return 0; }
-    if c == b'c' || c == b'C' { return 1; }
-    if c == b'd' || c == b'D' { return 2; }
-    if c == b'e' || c == b'E' { return 3; }
-    if c == b'f' || c == b'F' { return 4; }
-    if c == b'g' || c == b'G' { return 5; }
-    if c == b'h' || c == b'H' { return 6; }
-    if c == b'i' || c == b'I' { return 7; }
-    if c == b'k' || c == b'K' { return 8; }
-    if c == b'l' || c == b'L' { return 9; }
-    if c == b'm' || c == b'M' { return 10; }
-    if c == b'n' || c == b'N' { return 11; }
-    if c == b'p' || c == b'P' { return 12; }
-    if c == b'q' || c == b'Q' { return 13; }
-    if c == b'r' || c == b'R' { return 14; }
-    if c == b's' || c == b'S' { return 15; }
-    if c == b't' || c == b'T' { return 16; }
-    if c == b'v' || c == b'V' { return 17; }
-    if c == b'w' || c == b'W' { return 18; }
-    if c == b'y' || c == b'Y' { return 19; }
+    if c == b'a' || c == b'A' {
+        return 0;
+    }
+    if c == b'c' || c == b'C' {
+        return 1;
+    }
+    if c == b'd' || c == b'D' {
+        return 2;
+    }
+    if c == b'e' || c == b'E' {
+        return 3;
+    }
+    if c == b'f' || c == b'F' {
+        return 4;
+    }
+    if c == b'g' || c == b'G' {
+        return 5;
+    }
+    if c == b'h' || c == b'H' {
+        return 6;
+    }
+    if c == b'i' || c == b'I' {
+        return 7;
+    }
+    if c == b'k' || c == b'K' {
+        return 8;
+    }
+    if c == b'l' || c == b'L' {
+        return 9;
+    }
+    if c == b'm' || c == b'M' {
+        return 10;
+    }
+    if c == b'n' || c == b'N' {
+        return 11;
+    }
+    if c == b'p' || c == b'P' {
+        return 12;
+    }
+    if c == b'q' || c == b'Q' {
+        return 13;
+    }
+    if c == b'r' || c == b'R' {
+        return 14;
+    }
+    if c == b's' || c == b'S' {
+        return 15;
+    }
+    if c == b't' || c == b'T' {
+        return 16;
+    }
+    if c == b'v' || c == b'V' {
+        return 17;
+    }
+    if c == b'w' || c == b'W' {
+        return 18;
+    }
+    if c == b'y' || c == b'Y' {
+        return 19;
+    }
     -1
 }
 
 /* Converts a numerical value to an amino acid letter */
 pub unsafe fn amino_letter(num: c_int) -> c_char {
-    if num == 0 { return b'A' as c_char; }
-    if num == 1 { return b'C' as c_char; }
-    if num == 2 { return b'D' as c_char; }
-    if num == 3 { return b'E' as c_char; }
-    if num == 4 { return b'F' as c_char; }
-    if num == 5 { return b'G' as c_char; }
-    if num == 6 { return b'H' as c_char; }
-    if num == 7 { return b'I' as c_char; }
-    if num == 8 { return b'K' as c_char; }
-    if num == 9 { return b'L' as c_char; }
-    if num == 10 { return b'M' as c_char; }
-    if num == 11 { return b'N' as c_char; }
-    if num == 12 { return b'P' as c_char; }
-    if num == 13 { return b'Q' as c_char; }
-    if num == 14 { return b'R' as c_char; }
-    if num == 15 { return b'S' as c_char; }
-    if num == 16 { return b'T' as c_char; }
-    if num == 17 { return b'V' as c_char; }
-    if num == 18 { return b'W' as c_char; }
-    if num == 19 { return b'Y' as c_char; }
+    if num == 0 {
+        return b'A' as c_char;
+    }
+    if num == 1 {
+        return b'C' as c_char;
+    }
+    if num == 2 {
+        return b'D' as c_char;
+    }
+    if num == 3 {
+        return b'E' as c_char;
+    }
+    if num == 4 {
+        return b'F' as c_char;
+    }
+    if num == 5 {
+        return b'G' as c_char;
+    }
+    if num == 6 {
+        return b'H' as c_char;
+    }
+    if num == 7 {
+        return b'I' as c_char;
+    }
+    if num == 8 {
+        return b'K' as c_char;
+    }
+    if num == 9 {
+        return b'L' as c_char;
+    }
+    if num == 10 {
+        return b'M' as c_char;
+    }
+    if num == 11 {
+        return b'N' as c_char;
+    }
+    if num == 12 {
+        return b'P' as c_char;
+    }
+    if num == 13 {
+        return b'Q' as c_char;
+    }
+    if num == 14 {
+        return b'R' as c_char;
+    }
+    if num == 15 {
+        return b'S' as c_char;
+    }
+    if num == 16 {
+        return b'T' as c_char;
+    }
+    if num == 17 {
+        return b'V' as c_char;
+    }
+    if num == 18 {
+        return b'W' as c_char;
+    }
+    if num == 19 {
+        return b'Y' as c_char;
+    }
     b'X' as c_char
 }
 
@@ -872,9 +935,17 @@ pub unsafe fn rframe(fr: c_int, slen: c_int) -> c_int {
 
 pub unsafe fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
     if n1 > n2 {
-        if n1 > n3 { 0 } else { 2 }
+        if n1 > n3 {
+            0
+        } else {
+            2
+        }
     } else {
-        if n2 > n3 { 1 } else { 2 }
+        if n2 > n3 {
+            1
+        } else {
+            2
+        }
     }
 }
 
@@ -991,13 +1062,7 @@ pub unsafe fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
 }
 
 /* Builds a 'len'-mer background for whole sequence */
-pub unsafe fn calc_mer_bg(
-    len: c_int,
-    seq: *mut u8,
-    rseq: *mut u8,
-    slen: c_int,
-    bg: *mut c_double,
-) {
+pub unsafe fn calc_mer_bg(len: c_int, seq: *mut u8, rseq: *mut u8, slen: c_int, bg: *mut c_double) {
     let mut glob: c_int = 0;
     let mut size: c_int = 1;
 
@@ -1012,7 +1077,8 @@ pub unsafe fn calc_mer_bg(
         glob += 2;
     }
     for i in 0..size {
-        *bg.add(i as usize) = (*counts.add(i as usize) as c_double * 1.0) / (glob as c_double * 1.0);
+        *bg.add(i as usize) =
+            (*counts.add(i as usize) as c_double * 1.0) / (glob as c_double * 1.0);
     }
     drop(counts_vec);
 }

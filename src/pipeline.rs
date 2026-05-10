@@ -55,13 +55,6 @@ use crate::sequence::{
 use crate::training::{read_training_file, write_training_file};
 
 // ---------------------------------------------------------------------------
-// Helper: sort a Node slice by (ndx, -strand) matching compare_nodes logic
-// ---------------------------------------------------------------------------
-unsafe fn sort_nodes(nodes: &mut [Node]) {
-    nodes.sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
-}
-
-// ---------------------------------------------------------------------------
 // Main pipeline: replaces C main()
 // ---------------------------------------------------------------------------
 #[allow(unused_assignments)]
@@ -356,7 +349,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
             nmask,
             &mut tinf,
         );
-        sort_nodes(&mut nodes_vec[..nn as usize]);
+        nodes_vec[..nn as usize]
+            .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
         if quiet == 0 {
             eprintln!("{} nodes", nn);
         }
@@ -565,7 +559,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 nmask,
                 &mut tinf,
             );
-            sort_nodes(&mut nodes_vec[..nn as usize]);
+            nodes_vec[..nn as usize]
+                .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 
             score_nodes(seq, rseq, slen, nodes, nn, &mut tinf, closed, is_meta);
             if start_ptr != stdout_fd {
@@ -667,7 +662,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                         nmask,
                         meta[mi as usize].tinf,
                     );
-                    sort_nodes(&mut nodes_vec[..nn as usize]);
+                    nodes_vec[..nn as usize]
+                        .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
                 }
                 if (*meta[mi as usize].tinf).gc < low || (*meta[mi as usize].tinf).gc > high {
                     continue;
@@ -707,7 +703,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 nmask,
                 meta[max_phase as usize].tinf,
             );
-            sort_nodes(&mut nodes_vec[..nn as usize]);
+            nodes_vec[..nn as usize]
+                .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
             score_nodes(
                 seq,
                 rseq,

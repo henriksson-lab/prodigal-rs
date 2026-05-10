@@ -2,7 +2,7 @@ use std::os::raw::c_int;
 
 use crate::bitmap::set;
 use crate::sequence::rcom_seq;
-use crate::types::{Gene, Mask, Node, MAX_GENES, MAX_MASKS, MAX_SEQ, MASK_SIZE, STT_NOD};
+use crate::types::{Gene, Mask, Node, MASK_SIZE, MAX_GENES, MAX_MASKS, MAX_SEQ, STT_NOD};
 
 /// Internal scratch buffers for the prediction pipeline.
 pub(crate) struct SequenceBuffer {
@@ -40,11 +40,7 @@ impl SequenceBuffer {
 
     /// Encode a single DNA sequence into the internal 2-bit bitmap format.
     /// Returns (sequence_length, gc_content).
-    pub unsafe fn encode(
-        &mut self,
-        dna: &[u8],
-        do_mask: bool,
-    ) -> (c_int, f64) {
+    pub unsafe fn encode(&mut self, dna: &[u8], do_mask: bool) -> (c_int, f64) {
         self.clear_seq(self.seq.len() * 4);
 
         let mut bctr: c_int = 0;
@@ -116,11 +112,7 @@ impl SequenceBuffer {
     /// Encode multiple sequences concatenated with TTAATTAATTAA spacers.
     /// Used for training (mirrors read_seq_training behavior).
     /// Returns (total_length, gc_content).
-    pub unsafe fn encode_training(
-        &mut self,
-        sequences: &[&[u8]],
-        do_mask: bool,
-    ) -> (c_int, f64) {
+    pub unsafe fn encode_training(&mut self, sequences: &[&[u8]], do_mask: bool) -> (c_int, f64) {
         self.clear_seq(self.seq.len() * 4);
 
         let mut bctr: c_int = 0;

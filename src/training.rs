@@ -5,10 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int};
 
-pub unsafe fn read_training_file(
-    path: *const c_char,
-    tinf: *mut Training,
-) -> c_int {
+pub unsafe fn read_training_file(path: *const c_char, tinf: *mut Training) -> c_int {
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
         Err(_) => return 1,
@@ -25,10 +22,7 @@ pub unsafe fn read_training_file(
     }
 }
 
-pub unsafe fn write_training_file(
-    path: *const c_char,
-    tinf: *mut Training,
-) -> c_int {
+pub unsafe fn write_training_file(path: *const c_char, tinf: *mut Training) -> c_int {
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
         Err(_) => return -1,

@@ -1,5 +1,5 @@
-use crate::types::Training;
 use super::types::ProdigalError;
+use crate::types::Training;
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -16,7 +16,9 @@ impl TrainingData {
         let mut file = std::fs::File::open(path)?;
         let mut inner = Box::new(unsafe { std::mem::zeroed::<Training>() });
         let size = std::mem::size_of::<Training>();
-        let buf = unsafe { std::slice::from_raw_parts_mut(&mut *inner as *mut Training as *mut u8, size) };
+        let buf = unsafe {
+            std::slice::from_raw_parts_mut(&mut *inner as *mut Training as *mut u8, size)
+        };
         file.read_exact(buf)?;
         Ok(TrainingData { inner })
     }
@@ -25,7 +27,9 @@ impl TrainingData {
     pub fn save(&self, path: impl AsRef<Path>) -> Result<(), ProdigalError> {
         let mut file = std::fs::File::create(path)?;
         let size = std::mem::size_of::<Training>();
-        let buf = unsafe { std::slice::from_raw_parts(&*self.inner as *const Training as *const u8, size) };
+        let buf = unsafe {
+            std::slice::from_raw_parts(&*self.inner as *const Training as *const u8, size)
+        };
         file.write_all(buf)?;
         Ok(())
     }
