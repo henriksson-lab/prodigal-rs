@@ -1,20 +1,21 @@
-# Prodigal-rs (Rust)
+# Prodigal-rs
 
 Pure Rust translation of [Prodigal](https://github.com/hyattpd/Prodigal) — a prokaryotic gene prediction tool.
 
 Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
 
+* 2026-05-10 - 3 bugs fixed in a renewed audit
 * 2026-04-23 - Code is ready for testing on real data, but stay vigilant for remaining errors. Compare with regular Prodigal on your data before considering this as a replacement. 
 * This translation is only marginally faster than the original
 
-## This is an LLM-mediated faithful (hopefully) translation, not the original code!
+
+## This is an LLM-mediated faithful (hopefully) translation, not the original code! 
 
 Most users should probably first see if the existing original code works for them, unless they have reason otherwise. The original source
 may have newer features and it has had more love in terms of fixing bugs. In fact, we aim to replicate bugs if they are present, for the
 sake of reproducibility! (but then we might have added a few more in the process)
 
-There are however cases when you might prefer this Rust version. We generally agree with [this page](https://rewrites.bio/)
-but more specifically:
+There are however cases when you might prefer this Rust version. We generally agree with [this manifesto](https://rewrites.bio/) but more specifically:
 * We have had many issues with ensuring that our software works using existing containers (Docker, PodMan, Singularity). One size does not fit all and it eats our resources trying to keep up with every way of delivering software
 * Common package managers do not work well. It was great when we had a few Linux distributions with stable procedures, but now there are just too many ecosystems (Homebrew, Conda). Conda has an NP-complete resolver which does not scale. Homebrew is only so-stable. And our dependencies in Python still break. These can no longer be considered professional serious options. Meanwhile, Cargo enables multiple versions of packages to be available, even within the same program(!)
 * The future is the web. We deploy software in the web browser, and until now that has meant Javascript. This is a language where even the == operator is broken. Typescript is one step up, but a game changer is the ability to compile Rust code into webassembly, enabling performance and sharing of code with the backend. Translating code to Rust enables new ways of deployment and running code in the browser has especial benefits for science - researchers do not have deep pockets to run servers, so pushing compute to the user enables deployment that otherwise would be impossible
@@ -23,23 +24,13 @@ but more specifically:
 
 But:
 
-* **This approach should still be considered experimental**. The LLM technology is immature and has sharp corners. But there are opportunities to reap, and the genie is not going back to the bottle. This translation is as much aimed to learn how to improve the technology and get feedback on the results.
+* **This approach should still be considered experimental**. The LLM technology is immature and has sharp corners. But there are opportunities to reap, and the genie is not going back into the bottle. This translation is as much aimed to learn how to improve the technology and get feedback on the results.
 * Translations are not endorsed by the original authors unless otherwise noted. **Do not send bug reports to the original developers**. Use our Github issues page instead.
 * **Do not trust the benchmarks on this page**. They are used to help evaluate the translation. If you want improved performance, you generally have to use this code as a library, and use the additional tricks it offers. We generally accept performance losses in order to reduce our dependency issues
 * **Check the original Github pages for information about the package**. This README is kept sparse on purpose. It is not meant to be the primary source of information
+* **If you are the author of the original code and wish to move to Rust, you can obtain ownership of this repository and crate**. Until then, our commitment is to offer an as-faithful-as-possible translation of a snapshot of your code. If we find serious bugs, we will report them to you. Otherwise we will just replicate them, to ensure comparability across studies that claim to use package XYZ v.666. Think of this like a fancy Ubuntu .deb-package of your software - that is how we treat it
 
-## Translation audit status
-
-The original C source is kept in `Prodigal/`. The root `ccc_mapping.toml` maps original C functions to their Rust counterparts for use with [`code-complexity-comparator`](../code-complexity-comparator). Most translated functions intentionally keep the original function name; the mapping adds path pins and maps C `main` to Rust `run_pipeline`.
-
-Known audit notes:
-
-* The C metagenome initializers `initialize_metagenome_0` through `initialize_metagenome_49` are represented in Rust as binary fixtures loaded by `load_metagenome`, so they are not one-function-per-function mappings in `ccc_mapping.toml`.
-* `dprog` omits one defensive guard from the original simple-overlap untangling pass. The C code skips when no matching stop node is found; the Rust loop can walk before the node array in that unexpected case.
-* CLI compatibility is not exact: uppercase aliases such as `-A`, `-C`, etc. and lowercase `-v` are accepted by the original but rejected by the current Clap-based CLI.
-
-The last local audit run used `ccc-rs analyze/compare/missing/constants-diff` against `Prodigal/` and `src/`, plus `cargo test`. Comparator output still contains expected noise from Rust formatting syntax and byte literals, so direct source inspection is still required for flagged functions.
-
+This blurb might be out of date. Go to [this page](https://github.com/henriksson-lab/rustification) for the latest information and further information about how we approach translation
 
 
 ## Installation
