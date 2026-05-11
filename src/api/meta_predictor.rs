@@ -7,6 +7,7 @@ use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::os::raw::c_int;
 use std::sync::Arc;
 
+use rayon::prelude::*;
 use rayon::ThreadPool;
 
 use super::convert::gene_to_predicted;
@@ -89,28 +90,40 @@ impl MetaPredictor {
 
     /// Predict genes in the given sequence.
     pub fn predict(&self, seq: &[u8]) -> Result<Vec<PredictedGene>, ProdigalError> {
-        if seq.is_empty() {
-            return Err(ProdigalError::EmptySequence);
-        }
-        if seq.len() > MAX_SEQ {
-            return Err(ProdigalError::SequenceTooLong {
-                length: seq.len(),
-                max: MAX_SEQ,
-            });
-        }
+        validate_sequence(seq)?;
 
-        let seq = seq.to_vec();
-        let models = Arc::clone(&self.models);
-        let config = self.config.clone();
-        let pool = Arc::clone(&self.pool);
-
-        std::thread::Builder::new()
-            .stack_size(META_PREDICTOR_STACK_SIZE)
-            .spawn(move || pool.install(|| predict_parallel(&seq, &models, &config)))
-            .expect("failed to spawn worker thread")
-            .join()
-            .expect("worker thread panicked")
+        self.pool
+            .install(|| predict_parallel(seq, &self.models, &self.config))
     }
+
+    /// Predict genes in a batch of sequences, preserving input order.
+    pub fn predict_batch<S>(&self, seqs: &[S]) -> Result<Vec<Vec<PredictedGene>>, ProdigalError>
+    where
+        S: AsRef<[u8]> + Sync,
+    {
+        for seq in seqs {
+            validate_sequence(seq.as_ref())?;
+        }
+
+        self.pool.install(|| {
+            seqs.par_iter()
+                .map(|seq| predict_parallel(seq.as_ref(), &self.models, &self.config))
+                .collect()
+        })
+    }
+}
+
+fn validate_sequence(seq: &[u8]) -> Result<(), ProdigalError> {
+    if seq.is_empty() {
+        return Err(ProdigalError::EmptySequence);
+    }
+    if seq.len() > MAX_SEQ {
+        return Err(ProdigalError::SequenceTooLong {
+            length: seq.len(),
+            max: MAX_SEQ,
+        });
+    }
+    Ok(())
 }
 
 fn load_meta_models() -> Vec<Box<Training>> {
