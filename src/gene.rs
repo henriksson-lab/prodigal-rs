@@ -104,7 +104,18 @@ pub unsafe fn add_genes(glist: *mut Gene, nod: *mut Node, dbeg: c_int) -> c_int 
     ctr
 }
 
-/// Tweak final starts to improve gene predictions.
+/// Attempts to solve the problem of extremely close starts. If two potential
+/// starts are 5 amino acids or less away from each other, this routine sets
+/// their coding equal to each other and lets the RBS/operon/ATG-GTG-TTG start
+/// features determine which start to use, under the assumption that 5 or less
+/// words of coding is too weak a signal to use to select the proper start.
+///
+/// In addition, attempts to correct TTG (or whatever start codon is rare)
+/// starts that have an RBS score, an upstream score, and a coding score all
+/// superior to whatever start was initially chosen.
+///
+/// This routine was tested on numerous genomes and found to increase overall
+/// performance.
 pub unsafe fn tweak_final_starts(
     genes: *mut Gene,
     ng: c_int,
@@ -325,7 +336,10 @@ pub unsafe fn tweak_final_starts(
     }
 }
 
-/// Record gene data strings into the gene_data and score_data fields.
+/// Builds the `gene_data` and `score_data` annotation strings for each gene,
+/// recording start type, partial-edge flags, RBS motif/spacer, GC content,
+/// and the component scores (confidence, total, coding, start, RBS, upstream,
+/// type) used in the final output.
 pub unsafe fn record_gene_data(
     genes: *mut Gene,
     ng: c_int,

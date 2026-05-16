@@ -129,6 +129,8 @@ static INIT_FNS: [unsafe fn(*mut Training); 50] = [
     initialize_metagenome_49,
 ];
 
+/// Initialize the metagenomic bins with the precalculated training files
+/// from the model organisms that best represent all of microbial Genbank.
 pub unsafe fn initialize_metagenomic_bins(meta: *mut MetagenomicBin) {
     for i in 0..50 {
         let m = &mut *meta.add(i);

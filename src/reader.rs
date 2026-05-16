@@ -38,6 +38,8 @@ impl SeqReader {
         }
     }
 
+    /// Slurp all of stdin into memory and wrap it in a seekable reader so the
+    /// pipeline's rewind-and-rescan logic works on piped input.
     pub fn stdin() -> io::Result<Self> {
         let mut data = Vec::new();
         io::stdin().read_to_end(&mut data)?;

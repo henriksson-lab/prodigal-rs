@@ -53,6 +53,11 @@ unsafe fn cstr(p: *const c_char) -> &'static str {
   run off the edge, in which case they only have to be 50bp.
 *******************************************************************************/
 
+/// Adds nodes to the node list. Genes must be >=90bp in length, unless they
+/// run off the edge, in which case they only have to be 50bp. Walks both the
+/// forward and reverse strands, emitting start nodes (ATG/GTG/TTG) and stop
+/// nodes in all three reading frames, respecting masked regions. Returns the
+/// total number of nodes written.
 pub unsafe fn add_nodes(
     seq: *mut u8,
     rseq: *mut u8,
@@ -265,6 +270,8 @@ pub unsafe fn add_nodes(
 
 /* Simple routine to zero out the node scores */
 
+/// Simple routine to zero out the node scores: clears all per-node score,
+/// trace, motif and RBS fields so a fresh scoring pass can be performed.
 pub unsafe fn reset_node_scores(nod: *mut Node, nn: c_int) {
     for i in 0..nn as isize {
         for j in 0..3 {
@@ -294,6 +301,12 @@ pub unsafe fn reset_node_scores(nod: *mut Node, nn: c_int) {
   information about overlapping genes in order to build the models.
 *******************************************************************************/
 
+/// Since dynamic programming can't go 'backwards', we have to record
+/// information about overlapping genes in order to build the models. So, for
+/// example, in cases like 5'->3', 5'-3' overlapping on the same strand, we
+/// record information about the 2nd 5' end under the first 3' end's
+/// information. For every stop, we calculate and store all the best starts
+/// that could be used in genes that overlap that 3' end.
 pub unsafe fn record_overlapping_starts(
     nod: *mut Node,
     nn: c_int,
@@ -415,6 +428,11 @@ pub unsafe fn record_overlapping_starts(
   the most common frame for G+C content.
 *******************************************************************************/
 
+/// This routine goes through all the ORFs and counts the relative frequency
+/// of the most common frame for G+C content. In high GC genomes, this tends
+/// to be the third position. In low GC genomes, this tends to be the first
+/// position. Genes will be selected as a training set based on the nature of
+/// this bias for this particular organism.
 #[allow(unused_assignments)]
 pub unsafe fn record_gc_bias(gc: *mut c_int, nod: *mut Node, nn: c_int, tinf: *mut Training) {
     let mut ctr: [[c_int; 3]; 3] = [[0; 3]; 3];
@@ -512,6 +530,11 @@ pub unsafe fn record_gc_bias(gc: *mut c_int, nod: *mut Node, nn: c_int, tinf: *m
   background.
 *******************************************************************************/
 
+/// Simple routine that calculates the dicodon frequency in genes and in the
+/// background, and then stores the log likelihood of each 6-mer relative to
+/// the background. Walks the DP traceback starting from `dbeg` to accumulate
+/// 6-mer counts inside genes, then writes log-odds values into
+/// `tinf.gene_dc`, clamped to the range [-5.0, 5.0].
 pub unsafe fn calc_dicodon_gene(
     tinf: *mut Training,
     seq: *mut u8,
@@ -593,6 +616,9 @@ pub unsafe fn calc_dicodon_gene(
   Included as a stub for link compatibility.
 *******************************************************************************/
 
+/// Stub for an amino-acid-background routine declared in `node.h` but never
+/// defined in the original C source. Kept here only for link compatibility;
+/// performs no work.
 pub unsafe fn calc_amino_bg(
     _tinf: *mut Training,
     _seq: *mut u8,
@@ -608,6 +634,11 @@ pub unsafe fn calc_amino_bg(
   Scoring function for all the start nodes.
 *******************************************************************************/
 
+/// Scoring function for all the start nodes. This score has two factors:
+/// (1) Coding, which is a composite of coding score and length, and
+/// (2) Start score, which is a composite of RBS score and ATG/TTG/GTG.
+/// Also applies edge-gene bonuses/penalties and a metagenomic coding
+/// penalty when `is_meta` is set on short contigs.
 pub unsafe fn score_nodes(
     seq: *mut u8,
     rseq: *mut u8,
@@ -825,6 +856,9 @@ pub unsafe fn score_nodes(
 }
 
 /* Calculate the GC Content for each start-stop pair */
+/// Calculate the GC content for each start-stop pair and store it in
+/// `nod[i].gc_cont`. Iterates each frame on both strands, accumulating
+/// GC counts from the stop back to each start.
 pub unsafe fn calc_orf_gc(
     seq: *mut u8,
     _rseq: *mut u8,
@@ -894,6 +928,13 @@ pub unsafe fn calc_orf_gc(
   Score each candidate's coding.
 *******************************************************************************/
 
+/// Score each candidate's coding. Also sharpens coding/noncoding thresholds
+/// to prevent choosing interior starts when there is strong coding
+/// continuing upstream. The routine makes three passes: an initial pass
+/// summing the dicodon log-likelihoods from start to stop, a second pass
+/// that penalizes start nodes with ascending coding to their left, and a
+/// third pass that adds a length-based factor derived from the expected
+/// no-stop probability.
 pub unsafe fn raw_coding_score(
     seq: *mut u8,
     rseq: *mut u8,
@@ -1059,6 +1100,10 @@ pub unsafe fn raw_coding_score(
   uses an SD motif or not.
 *******************************************************************************/
 
+/// Examines the results of the SD motif search to determine if this organism
+/// uses an SD motif or not. Some motif of 3-6bp has to be good or we set
+/// `uses_sd` to 0, which will cause Prodigal to run the non-SD motif finder
+/// for starts.
 pub unsafe fn determine_sd_usage(tinf: *mut Training) {
     (*tinf).uses_sd = 1;
     if (*tinf).rbs_wt[0] >= 0.0 {
@@ -1079,6 +1124,12 @@ pub unsafe fn determine_sd_usage(tinf: *mut Training) {
   appropriate weight for that motif.
 *******************************************************************************/
 
+/// RBS scoring function: calculate the RBS motif and then multiply it by the
+/// appropriate weight for that motif (determined in the start training
+/// function). For each non-edge start node, the upstream window is scanned
+/// with both `shine_dalgarno_exact` and `shine_dalgarno_mm` and the best
+/// scoring exact and mismatch indices are stored in `nod[i].rbs[0]` and
+/// `nod[i].rbs[1]`.
 pub unsafe fn rbs_score(
     seq: *mut u8,
     rseq: *mut u8,
@@ -1160,6 +1211,13 @@ pub unsafe fn rbs_score(
   Iterative Algorithm to train starts (Shine-Dalgarno motifs only).
 *******************************************************************************/
 
+/// Iterative algorithm to train starts. It begins with all the highest
+/// coding starts in the model, scans for RBS/ATG-GTG-TTG usage, then starts
+/// moving starts around attempting to match these discoveries. This start
+/// trainer is for Shine-Dalgarno motifs only. Runs 10 iterations (a few more
+/// than the typical 4-5 needed for convergence) and at the final iteration
+/// also accumulates upstream base-composition counts, which are then
+/// converted into per-position log scores in `tinf.ups_comp`.
 pub unsafe fn train_starts_sd(
     seq: *mut u8,
     rseq: *mut u8,
@@ -1489,6 +1547,13 @@ pub unsafe fn train_starts_sd(
   Iterative Algorithm to train starts (non-SD version).
 *******************************************************************************/
 
+/// Iterative algorithm to train starts. It begins with all the highest
+/// coding starts in the model, scans for RBS/ATG-GTG-TTG usage, then starts
+/// moving starts around attempting to match these discoveries. Unlike the SD
+/// algorithm, it allows for any popular motif to be discovered. Runs 20
+/// iterations across three motif-finding stages (0: count all motifs, 1:
+/// count best motif and its sub-motifs, 2: count only the best motif), and
+/// at the final iteration also collects upstream base composition.
 pub unsafe fn train_starts_nonsd(
     seq: *mut u8,
     rseq: *mut u8,
@@ -1852,6 +1917,9 @@ pub unsafe fn train_starts_nonsd(
   For a given start, record the base composition of the upstream region.
 *******************************************************************************/
 
+/// For a given start, record the base composition of the upstream region at
+/// positions -1 and -2 and -15 to -44. This will be used to supplement the
+/// SD (or other) motif finder with additional information.
 pub unsafe fn count_upstream_composition(
     seq: *mut u8,
     slen: c_int,
@@ -1882,6 +1950,9 @@ pub unsafe fn count_upstream_composition(
   For a given start, score the base composition of the upstream region.
 *******************************************************************************/
 
+/// For a given start, score the base composition of the upstream region at
+/// positions -1 and -2 and -15 to -44. This will be used to supplement the
+/// SD (or other) motif finder with additional information.
 pub unsafe fn score_upstream_composition(
     seq: *mut u8,
     slen: c_int,
@@ -1915,6 +1986,11 @@ pub unsafe fn score_upstream_composition(
   return the highest scoring mer/spacer combination.
 *******************************************************************************/
 
+/// Given the weights for various motifs/distances from the training file,
+/// return the highest scoring mer/spacer combination of 3-6bp motifs with a
+/// spacer ranging from 3bp to 15bp. In the final stage of start training
+/// (`stage == 2`), only good scoring motifs are returned; otherwise a "no
+/// motif" placeholder is stored in `nod.mot`.
 pub unsafe fn find_best_upstream_motif(
     tinf: *mut Training,
     seq: *mut u8,
@@ -1997,6 +2073,11 @@ pub unsafe fn find_best_upstream_motif(
   Update the motif counts from a putative "real" start.
 *******************************************************************************/
 
+/// Update the motif counts from a putative "real" start. This is done in
+/// three stages. In stage 0, all motifs sizes 3-6bp in the region with
+/// spacer 3-15bp are counted. In stage 1, only the best motif and all its
+/// subsets are counted (e.g. for AGGAG, we would count AGGAG, AGGA, GGAG,
+/// AGG, GGA, and GAG). In stage 2, only the best single motif is counted.
 #[allow(unused_assignments)]
 pub unsafe fn update_motif_counts(
     mcnt: *mut [[f64; 4096]; 4],
@@ -2095,6 +2176,14 @@ pub unsafe fn update_motif_counts(
   Build coverage map for motifs.
 *******************************************************************************/
 
+/// In addition to log likelihood, we also require a motif to actually be
+/// present a good portion of the time in an absolute sense across the
+/// genome. The coverage map is just a numerical map of whether or not to
+/// accept a putative motif as a real one (despite its log likelihood score).
+/// A motif is considered "good" if it contains a 3-base subset of itself
+/// that is present in at least 20% of the total genes. In the final stage
+/// of iterative start training, all motifs are labeled good. 0 = bad,
+/// 1 = good, 2 = good w/mismatch.
 pub unsafe fn build_coverage_map(
     real: *mut [[f64; 4096]; 4],
     good: *mut [[c_int; 4096]; 4],
@@ -2192,6 +2281,11 @@ pub unsafe fn build_coverage_map(
   Intergenic modifier for connecting two genes.
 *******************************************************************************/
 
+/// When connecting two genes, we add a bonus for the -1 and -4 base overlaps
+/// on the same strand, which often signify an operon and negate the need for
+/// an RBS for the second gene. In addition, we add a slight bonus when genes
+/// are close and a slight penalty when switching strands or having a large
+/// intergenic space.
 pub unsafe fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64 {
     let mut rval: f64 = 0.0;
     let mut ovlp: f64 = 0.0;
@@ -2234,6 +2328,12 @@ pub unsafe fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) 
   Write detailed scoring information about every single possible gene.
 *******************************************************************************/
 
+/// Write detailed scoring information about every single possible gene.
+/// Only done at the user's request. Emits a tab-separated table per
+/// candidate start (one block per stop codon) including total/coding/start
+/// scores, RBS motif description, spacer, upstream/type scores and GC
+/// content; sorts nodes by stop first, then restores the original ordering
+/// before returning.
 pub unsafe fn write_start_file(
     fh: c_int,
     nod: *mut Node,
@@ -2439,6 +2539,8 @@ pub unsafe fn write_start_file(
 
 /* Checks to see if a node boundary crosses a mask */
 
+/// Checks to see if a node boundary crosses a mask. Returns 1 if the
+/// interval `[x, y]` overlaps any region in `mlist`, otherwise 0.
 pub unsafe fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_int) -> c_int {
     for i in 0..nm {
         if y < (*mlist.offset(i as isize)).begin || x > (*mlist.offset(i as isize)).end {
@@ -2451,6 +2553,7 @@ pub unsafe fn cross_mask(x: c_int, y: c_int, mlist: *mut Mask, nm: c_int) -> c_i
 
 /* Return the minimum of two numbers */
 
+/// Return the minimum of two numbers.
 pub unsafe fn dmin(x: f64, y: f64) -> f64 {
     if x < y {
         x
@@ -2461,6 +2564,7 @@ pub unsafe fn dmin(x: f64, y: f64) -> f64 {
 
 /* Return the maximum of two numbers */
 
+/// Return the maximum of two numbers.
 pub unsafe fn dmax(x: f64, y: f64) -> f64 {
     if x > y {
         x
@@ -2471,6 +2575,8 @@ pub unsafe fn dmax(x: f64, y: f64) -> f64 {
 
 /* Sorting routine for nodes */
 
+/// qsort-style comparator that orders nodes by ascending `ndx`, breaking
+/// ties by descending `strand` (forward strand first).
 pub unsafe fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
     let n1 = v1 as *const Node;
     let n2 = v2 as *const Node;
@@ -2491,6 +2597,8 @@ pub unsafe fn compare_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
 
 /* Sorts all nodes by common stop */
 
+/// qsort-style comparator that sorts all nodes by common stop. Orders by
+/// ascending `stop_val`, then descending `strand`, then ascending `ndx`.
 pub unsafe fn stopcmp_nodes(v1: *const c_void, v2: *const c_void) -> c_int {
     let n1 = v1 as *const Node;
     let n2 = v2 as *const Node;

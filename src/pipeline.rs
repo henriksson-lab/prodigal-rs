@@ -57,6 +57,13 @@ use crate::training::{read_training_file, write_training_file};
 // ---------------------------------------------------------------------------
 // Main pipeline: replaces C main()
 // ---------------------------------------------------------------------------
+/// Orchestrate the full Prodigal pipeline (port of C `main`).
+///
+/// Opens input/output handles, optionally reads or writes a training file, and
+/// then for each sequence either runs the single-genome path (self-training
+/// followed by gene finding) or the metagenomic path (scoring against the 50
+/// pre-built bins and keeping the best-scoring one). Returns the process exit
+/// code: 0 on success, non-zero on failure (matching the C exit codes).
 #[allow(unused_assignments)]
 pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     // Convert config file paths to CStrings for FFI

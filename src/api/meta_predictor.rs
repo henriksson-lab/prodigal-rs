@@ -113,6 +113,7 @@ impl MetaPredictor {
     }
 }
 
+/// Reject empty or oversized input sequences before encoding.
 fn validate_sequence(seq: &[u8]) -> Result<(), ProdigalError> {
     if seq.is_empty() {
         return Err(ProdigalError::EmptySequence);
@@ -126,6 +127,7 @@ fn validate_sequence(seq: &[u8]) -> Result<(), ProdigalError> {
     Ok(())
 }
 
+/// Allocate and initialize all `NUM_META` pre-trained metagenomic models on the heap.
 fn load_meta_models() -> Vec<Box<Training>> {
     let mut models: Vec<Box<Training>> = Vec::with_capacity(NUM_META);
     for i in 0..NUM_META {
@@ -152,6 +154,11 @@ struct TransTableGroup {
     nn: c_int,
 }
 
+/// Run the metagenomic gene-prediction pipeline on a single sequence.
+///
+/// Encodes the input, builds node arrays once per translation-table group,
+/// scores all GC-compatible models, keeps the highest-scoring solution, and
+/// converts its genes to `PredictedGene` values.
 fn predict_parallel(
     seq: &[u8],
     models: &[Box<Training>],

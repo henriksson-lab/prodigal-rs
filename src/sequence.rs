@@ -107,6 +107,12 @@ unsafe fn parse_uint_from_cstr(s: *const c_char) -> Option<c_uint> {
   preferred.
 *******************************************************************************/
 
+/// Read the sequence for training purposes. If we encounter multiple
+/// sequences, we insert TTAATTAATTAA between each one to force stops in all
+/// six frames. When we hit `MAX_SEQ` bp, we stop and return what we've got so
+/// far for training. This routine reads in FASTA, and has a very 'loose'
+/// Genbank and Embl parser, but, to be safe, FASTA should generally be
+/// preferred.
 pub unsafe fn read_seq_training(
     fp: *mut c_void,
     seq: *mut u8,
@@ -243,6 +249,7 @@ pub unsafe fn read_seq_training(
 
 /* This routine reads in the next sequence in a FASTA/GB/EMBL file */
 
+/// Reads in the next sequence in a FASTA/GB/EMBL file.
 pub unsafe fn next_seq_multi(
     fp: *mut c_void,
     seq: *mut u8,
@@ -389,6 +396,8 @@ pub unsafe fn next_seq_multi(
 }
 
 /* Takes first word of header */
+/// Takes first word of header (whitespace-delimited) and writes it to
+/// `short_header`. If the header is empty, falls back to `Prodigal_Seq_<sctr>`.
 pub unsafe fn calc_short_header(header: *mut c_char, short_header: *mut c_char, sctr: c_int) {
     c_strcpy(short_header, header);
     let hlen = c_strlen(header);
@@ -413,6 +422,7 @@ pub unsafe fn calc_short_header(header: *mut c_char, short_header: *mut c_char, 
 
 /* Takes rseq and fills it up with the rev complement of seq */
 
+/// Takes `rseq` and fills it up with the reverse complement of `seq`.
 #[inline]
 pub unsafe fn rcom_seq(seq: *mut u8, rseq: *mut u8, useq: *mut u8, len: c_int) {
     let slen = len * 2;
@@ -433,6 +443,7 @@ pub unsafe fn rcom_seq(seq: *mut u8, rseq: *mut u8, useq: *mut u8, len: c_int) {
 /* Simple routines to say whether or not bases are */
 /* a, c, t, g, starts, stops, etc. */
 
+/// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'A', else 0.
 pub unsafe fn is_a(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 1 || test(seq, ndx + 1) == 1 {
@@ -441,6 +452,7 @@ pub unsafe fn is_a(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'C', else 0.
 pub unsafe fn is_c(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 1 || test(seq, ndx + 1) == 0 {
@@ -449,6 +461,7 @@ pub unsafe fn is_c(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'G', else 0.
 pub unsafe fn is_g(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 0 || test(seq, ndx + 1) == 1 {
@@ -457,6 +470,7 @@ pub unsafe fn is_g(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'T', else 0.
 pub unsafe fn is_t(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) == 0 || test(seq, ndx + 1) == 0 {
@@ -465,6 +479,8 @@ pub unsafe fn is_t(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if position `n` is marked as an unknown/'N' base in the unknown-mask
+/// bitmap `useq`, else 0.
 pub unsafe fn is_n(useq: *mut u8, n: c_int) -> c_int {
     if test(useq, n) == 0 {
         return 0;
@@ -472,6 +488,8 @@ pub unsafe fn is_n(useq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the codon at position `n` is a stop codon for the translation
+/// table specified in `tinf`, else 0.
 #[inline]
 pub unsafe fn is_stop(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     let tt = (*tinf).trans_table;
@@ -528,6 +546,9 @@ pub unsafe fn is_stop(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     0
 }
 
+/// Returns 1 if the codon at position `n` is a recognized start codon
+/// (ATG/GTG/TTG, gated by the translation table in `tinf`), else 0. Other
+/// initiation codons are not handled.
 #[inline]
 pub unsafe fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     let tt = (*tinf).trans_table;
@@ -562,6 +583,7 @@ pub unsafe fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
     0
 }
 
+/// Returns 1 if the codon at position `n` is literally ATG, else 0.
 #[inline]
 pub unsafe fn is_atg(seq: *mut u8, n: c_int) -> c_int {
     if is_a(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
@@ -570,6 +592,7 @@ pub unsafe fn is_atg(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the codon at position `n` is literally GTG, else 0.
 #[inline]
 pub unsafe fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
     if is_g(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
@@ -578,6 +601,7 @@ pub unsafe fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the codon at position `n` is literally TTG, else 0.
 #[inline]
 pub unsafe fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
     if is_t(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
@@ -586,6 +610,8 @@ pub unsafe fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
     1
 }
 
+/// Returns 1 if the base at position `n` is G or C (i.e. the two packed bits
+/// differ), else 0.
 #[inline]
 pub unsafe fn is_gc(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
@@ -595,6 +621,7 @@ pub unsafe fn is_gc(seq: *mut u8, n: c_int) -> c_int {
     0
 }
 
+/// Returns the GC fraction of `seq` over the inclusive base range `[a, b]`.
 pub unsafe fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_double {
     let mut sum: c_double = 0.0;
     let mut gc: c_double = 0.0;
@@ -608,6 +635,10 @@ pub unsafe fn gc_content(seq: *mut u8, a: c_int, b: c_int) -> c_double {
 }
 
 /* Returns a single amino acid for this position */
+/// Returns a single amino acid letter for the codon at position `n`,
+/// respecting the translation table in `tinf`. If `is_init` is set, recognized
+/// start codons are translated as `M`. Stop codons return `*`, and unknown
+/// codons return `X`.
 pub unsafe fn amino(seq: *mut u8, n: c_int, tinf: *mut Training, is_init: c_int) -> c_char {
     let tt = (*tinf).trans_table;
 
@@ -791,6 +822,8 @@ pub unsafe fn amino(seq: *mut u8, n: c_int, tinf: *mut Training, is_init: c_int)
 }
 
 /* Converts an amino acid letter to a numerical value */
+/// Converts an amino acid letter to a numerical value in [0, 19], or -1 if
+/// the letter is not a standard amino acid code.
 pub unsafe fn amino_num(aa: c_char) -> c_int {
     let c = aa as u8;
     if c == b'a' || c == b'A' {
@@ -857,6 +890,8 @@ pub unsafe fn amino_num(aa: c_char) -> c_int {
 }
 
 /* Converts a numerical value to an amino acid letter */
+/// Converts a numerical value in [0, 19] to its amino acid letter,
+/// or returns 'X' for any out-of-range value.
 pub unsafe fn amino_letter(num: c_int) -> c_char {
     if num == 0 {
         return b'A' as c_char;
@@ -923,6 +958,8 @@ pub unsafe fn amino_letter(num: c_int) -> c_char {
 
 /* Returns the corresponding frame on the reverse strand */
 
+/// Returns the corresponding frame on the reverse strand, given a forward
+/// frame `fr` and the sequence length `slen`.
 pub unsafe fn rframe(fr: c_int, slen: c_int) -> c_int {
     let mut md = slen % 3 - 1;
     if md == 0 {
@@ -933,6 +970,8 @@ pub unsafe fn rframe(fr: c_int, slen: c_int) -> c_int {
 
 /* Simple 3-way max function */
 
+/// Simple 3-way max: returns 0, 1, or 2 indicating which of `n1`, `n2`, `n3`
+/// is largest (ties resolve toward the later index).
 pub unsafe fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
     if n1 > n2 {
         if n1 > n3 {
@@ -955,6 +994,10 @@ pub unsafe fn max_fr(n1: c_int, n2: c_int, n3: c_int) -> c_int {
   position in the sequence.
 *******************************************************************************/
 
+/// Creates a GC frame plot for a given sequence. This is simply a string with
+/// the highest GC content frame for a window centered on each position for
+/// every position in the sequence. Returns a heap-allocated `*mut c_int` array
+/// of length `slen` (caller takes ownership).
 pub unsafe fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c_int {
     let mut gp_vec: Vec<c_int> = vec![-1; slen as usize];
     let gp: *mut c_int = gp_vec.as_mut_ptr();
@@ -1018,6 +1061,8 @@ pub unsafe fn calc_most_gc_frame(seq: *mut u8, slen: c_int) -> *mut c_int {
 }
 
 /* Converts a word of size len to a number */
+/// Converts a `len`-base word starting at base position `pos` to its 2-bit
+/// packed integer index.
 #[inline]
 pub unsafe fn mer_ndx(len: c_int, seq: *mut u8, pos: c_int) -> c_int {
     let mut ndx: c_int = 0;
@@ -1028,6 +1073,8 @@ pub unsafe fn mer_ndx(len: c_int, seq: *mut u8, pos: c_int) -> c_int {
 }
 
 /* Gives a text string for a start */
+/// Writes a 3-character NUL-terminated text representation of a start codon
+/// type into `st`: 0 -> "ATG", 1 -> "GTG", 2 -> "TTG".
 pub unsafe fn start_text(st: *mut c_char, type_: c_int) {
     if type_ == 0 {
         *st.add(0) = b'A' as c_char;
@@ -1042,6 +1089,9 @@ pub unsafe fn start_text(st: *mut c_char, type_: c_int) {
 }
 
 /* Gives a text string for a mer of size 'len' (useful for outputting motifs) */
+/// Writes a NUL-terminated text string representation for a mer of size `len`
+/// encoded as the packed integer `ndx` into `qt`. Useful for outputting
+/// motifs. If `len` is 0, writes "None".
 pub unsafe fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
     let letters: [c_char; 4] = [
         b'A' as c_char,
@@ -1062,6 +1112,9 @@ pub unsafe fn mer_text(qt: *mut c_char, len: c_int, ndx: c_int) {
 }
 
 /* Builds a 'len'-mer background for whole sequence */
+/// Builds a `len`-mer background frequency table for the whole sequence,
+/// counting `len`-mers from both `seq` and `rseq` and writing normalized
+/// frequencies into `bg` (must be sized 4^len).
 pub unsafe fn calc_mer_bg(len: c_int, seq: *mut u8, rseq: *mut u8, slen: c_int, bg: *mut c_double) {
     let mut glob: c_int = 0;
     let mut size: c_int = 1;
@@ -1088,6 +1141,9 @@ pub unsafe fn calc_mer_bg(len: c_int, seq: *mut u8, rseq: *mut u8, slen: c_int, 
   sequence upstream of a start.
 *******************************************************************************/
 
+/// Finds the highest-scoring region similar to AGGAGG in a given stretch of
+/// sequence upstream of a start. Returns the RBS motif bin index whose weight
+/// in `rwt` is maximal among exact-matching candidates.
 #[inline]
 pub unsafe fn shine_dalgarno_exact(
     seq: *mut u8,
@@ -1222,6 +1278,9 @@ pub unsafe fn shine_dalgarno_exact(
   sequence upstream of a start.  Only considers 5/6-mers with 1 mismatch.
 *******************************************************************************/
 
+/// Finds the highest-scoring region similar to AGGAGG in a given stretch of
+/// sequence upstream of a start. Only considers 5/6-mers with 1 mismatch.
+/// Returns the RBS motif bin index whose weight in `rwt` is maximal.
 #[inline]
 pub unsafe fn shine_dalgarno_mm(
     seq: *mut u8,
@@ -1335,6 +1394,7 @@ pub unsafe fn shine_dalgarno_mm(
 }
 
 /* Returns the minimum of two numbers */
+/// Returns the minimum of two integers.
 pub unsafe fn imin(x: c_int, y: c_int) -> c_int {
     if x < y {
         x

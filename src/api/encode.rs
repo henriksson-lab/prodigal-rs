@@ -16,6 +16,8 @@ pub(crate) struct SequenceBuffer {
 }
 
 impl SequenceBuffer {
+    /// Allocate a fresh scratch buffer with capacity for `MAX_SEQ` bases and
+    /// the default node/gene/mask counts.
     pub fn new() -> Self {
         SequenceBuffer {
             seq: vec![0u8; MAX_SEQ / 4],

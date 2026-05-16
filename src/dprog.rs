@@ -23,13 +23,10 @@ use std::os::raw::c_int;
 
 use crate::node::intergenic_mod;
 
-/*******************************************************************************
-  Basic dynamic programming routine for predicting genes.  The 'flag' variable
-  is set to 0 for the initial dynamic programming routine based solely on GC
-  frame plot (used to construct a training set).  If the flag is set to 1, the
-  routine does the final dynamic programming based on coding, RBS scores, etc.
-*******************************************************************************/
-
+/// Basic dynamic programming routine for predicting genes.  The `flag` variable
+/// is set to 0 for the initial dynamic programming routine based solely on GC
+/// frame plot (used to construct a training set).  If the flag is set to 1, the
+/// routine does the final dynamic programming based on coding, RBS scores, etc.
 pub unsafe fn dprog(nod: *mut Node, nn: c_int, tinf: *mut Training, flag: c_int) -> c_int {
     let mut min: c_int;
     let mut max_ndx: c_int = -1;
@@ -172,15 +169,12 @@ pub unsafe fn dprog(nod: *mut Node, nn: c_int, tinf: *mut Training, flag: c_int)
     }
 }
 
-/*******************************************************************************
-  This routine scores the connection between two nodes, the most basic of which
-  is 5'fwd->3'fwd (gene) and 3'rev->5'rev (rev gene).  If the connection ending
-  at n2 is the maximal scoring model, it updates the pointers in the dynamic
-  programming model.  n3 is used to handle overlaps, i.e. cases where 5->3'
-  overlaps 5'->3' on the same strand.  In this case, 3' connects directly to 3',
-  and n3 is used to untangle the 5' end of the second gene.
-*******************************************************************************/
-
+/// This routine scores the connection between two nodes, the most basic of which
+/// is 5'fwd->3'fwd (gene) and 3'rev->5'rev (rev gene).  If the connection ending
+/// at `n2` is the maximal scoring model, it updates the pointers in the dynamic
+/// programming model.  `n3` is used to handle overlaps, i.e. cases where 5->3'
+/// overlaps 5'->3' on the same strand.  In this case, 3' connects directly to 3',
+/// and `n3` is used to untangle the 5' end of the second gene.
 pub unsafe fn score_connection(
     nod: *mut Node,
     p1: c_int,
@@ -454,12 +448,9 @@ pub unsafe fn score_connection(
     }
 }
 
-/*******************************************************************************
-  Sometimes bad genes creep into the model due to the node distance constraint
-  in the dynamic programming routine.  This routine just does a sweep through
-  the genes and eliminates ones with negative scores.
-*******************************************************************************/
-
+/// Sometimes bad genes creep into the model due to the node distance constraint
+/// in the dynamic programming routine.  This routine just does a sweep through
+/// the genes and eliminates ones with negative scores.
 pub unsafe fn eliminate_bad_genes(nod: *mut Node, dbeg: c_int, tinf: *mut Training) {
     let mut path: c_int;
 

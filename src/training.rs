@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::os::raw::{c_char, c_int};
 
+/// Reads a training file to use for gene prediction.
 pub unsafe fn read_training_file(path: *const c_char, tinf: *mut Training) -> c_int {
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
@@ -22,6 +23,7 @@ pub unsafe fn read_training_file(path: *const c_char, tinf: *mut Training) -> c_
     }
 }
 
+/// Writes a training file to use for a later run of gene prediction.
 pub unsafe fn write_training_file(path: *const c_char, tinf: *mut Training) -> c_int {
     let path_str = match CStr::from_ptr(path).to_str() {
         Ok(s) => s,
@@ -40,6 +42,11 @@ pub unsafe fn write_training_file(path: *const c_char, tinf: *mut Training) -> c
 }
 
 // Generate all 50 initialize_metagenome_N functions
+//
+// These mirror the hardcoded `initialize_metagenome_N` functions in the C
+// source, which initialize the training data for the model genomes chosen as
+// metagenomic "bins". Each generated function loads the embedded pre-trained
+// model for bin `N` into the provided `Training` pointer.
 macro_rules! init_metagenome_fn {
     ($n:literal, $name:ident) => {
         pub unsafe fn $name(tptr: *mut Training) {

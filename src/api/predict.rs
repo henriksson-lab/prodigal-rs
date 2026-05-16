@@ -32,6 +32,7 @@ use crate::node::{
 };
 use crate::sequence::calc_most_gc_frame;
 
+/// Validate that `config.translation_table` is one of the NCBI tables Prodigal supports.
 pub(crate) fn validate_config(config: &ProdigalConfig) -> Result<(), ProdigalError> {
     let tt = config.translation_table;
     if tt < 1 || tt > 25 || tt == 7 || tt == 8 || (tt >= 17 && tt <= 20) {
@@ -59,6 +60,11 @@ pub fn predict_meta_with(
     with_large_stack(move || predict_meta_inner(&seq, &config))
 }
 
+/// Single-threaded metagenomic prediction core.
+///
+/// Loads all 50 models, encodes the sequence once, then iterates models in
+/// order, rebuilding nodes only when the translation table changes and
+/// retaining the best-scoring DP solution to convert into `PredictedGene`s.
 fn predict_meta_inner(
     seq: &[u8],
     config: &ProdigalConfig,
@@ -205,6 +211,12 @@ pub fn train_with(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, P
     with_large_stack(move || train_inner(&seq, &config))
 }
 
+/// Core single-genome training routine.
+///
+/// Encodes the input, finds start/stop nodes, computes GC frame bias, runs an
+/// initial dynamic-programming pass, trains dicodon coding statistics, then
+/// trains RBS/start-codon weights (SD or non-SD) and returns the learned
+/// `TrainingData`.
 fn train_inner(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, ProdigalError> {
     let mut buf = SequenceBuffer::new();
     let mut tinf = Box::new(unsafe { std::mem::zeroed::<Training>() });
@@ -334,6 +346,11 @@ pub fn predict_with(
     with_large_stack(move || predict_inner(&seq, &training, &config))
 }
 
+/// Core single-genome prediction routine.
+///
+/// Encodes the sequence, builds and scores nodes against `training`, runs the
+/// dynamic-programming gene-path search, finalizes gene starts, and converts
+/// the resulting genes into `PredictedGene`s.
 fn predict_inner(
     seq: &[u8],
     training: &TrainingData,

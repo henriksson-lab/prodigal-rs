@@ -62,6 +62,8 @@ struct Cli {
     train_file: Option<String>,
 }
 
+/// CLI entry point: parses command-line arguments, validates the output format,
+/// translation table, and meta/single mode, then dispatches to `run_pipeline`.
 fn main() {
     let cli = Cli::parse();
 
