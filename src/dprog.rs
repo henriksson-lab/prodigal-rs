@@ -175,6 +175,7 @@ pub unsafe fn dprog(nod: *mut Node, nn: c_int, tinf: *mut Training, flag: c_int)
 /// programming model.  `n3` is used to handle overlaps, i.e. cases where 5->3'
 /// overlaps 5'->3' on the same strand.  In this case, 3' connects directly to 3',
 /// and `n3` is used to untangle the 5' end of the second gene.
+#[inline(always)]
 pub unsafe fn score_connection(
     nod: *mut Node,
     p1: c_int,

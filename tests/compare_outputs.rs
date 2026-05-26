@@ -158,6 +158,30 @@ fn test_single_genome_gbk_output() {
 }
 
 #[test]
+fn test_single_genome_uppercase_short_options() {
+    let input = sample_input();
+    compare_run(
+        "single-uppercase-options",
+        &[
+            "-I",
+            input.to_str().unwrap(),
+            "-O",
+            "OUTDIR/output.gff",
+            "-F",
+            "GFF",
+            "-A",
+            "OUTDIR/proteins.faa",
+            "-D",
+            "OUTDIR/genes.fna",
+            "-S",
+            "OUTDIR/starts.txt",
+            "-Q",
+        ],
+        &["output.gff", "proteins.faa", "genes.fna", "starts.txt"],
+    );
+}
+
+#[test]
 fn test_single_genome_gff_output() {
     let input = sample_input();
     compare_run(

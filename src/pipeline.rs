@@ -41,7 +41,7 @@ use crate::gene::{
     add_genes, print_genes, record_gene_data, tweak_final_starts, write_nucleotide_seqs,
     write_translations,
 };
-use crate::metagenomic::initialize_metagenomic_bins;
+use crate::metagenomic::initialize_metagenomic_metadata;
 use crate::node::{
     add_nodes, calc_dicodon_gene, determine_sd_usage, raw_coding_score, rbs_score, record_gc_bias,
     record_overlapping_starts, reset_node_scores, score_nodes, train_starts_nonsd, train_starts_sd,
@@ -154,15 +154,10 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     let mut meta: [MetagenomicBin; NUM_META] = std::mem::zeroed();
     let mut mlist: [Mask; MAX_MASKS] = [Mask { begin: 0, end: 0 }; MAX_MASKS];
 
-    // Allocate Training structs for metagenomic bins using Box::into_raw
-    // We collect the raw pointers so we can free them at the end.
-    let mut meta_tinf_ptrs: Vec<*mut Training> = Vec::with_capacity(NUM_META);
-    for i in 0..NUM_META {
-        std::ptr::copy_nonoverlapping(b"None\0".as_ptr(), meta[i].desc.as_mut_ptr() as *mut u8, 5);
-        let ptr = Box::into_raw(Box::new(std::mem::zeroed::<Training>()));
-        meta[i].tinf = ptr;
-        meta_tinf_ptrs.push(ptr);
-    }
+    let mut meta_gc: [f64; NUM_META] = [0.0; NUM_META];
+    let mut meta_trans_table: [c_int; NUM_META] = [0; NUM_META];
+    let mut meta_tinf: Training = std::mem::zeroed();
+    let mut best_tinf: Training = std::mem::zeroed();
 
     // Initialize variables
     nn = 0;
@@ -433,9 +428,6 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 }
                 // Clean up and return
                 // Vec memory freed automatically when dropped
-                for ptr in &meta_tinf_ptrs {
-                    drop(Box::from_raw(*ptr));
-                }
                 seq_reader_close(input_ptr);
                 if output_ptr != stdout_fd {
                     close_handle(output_ptr);
@@ -479,7 +471,11 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
             eprintln!("Request:  Metagenomic, Phase:  Training");
             eprint!("Initializing training files...");
         }
-        initialize_metagenomic_bins(meta.as_mut_ptr());
+        initialize_metagenomic_metadata(
+            meta.as_mut_ptr(),
+            meta_gc.as_mut_ptr(),
+            meta_trans_table.as_mut_ptr(),
+        );
         if quiet == 0 {
             eprintln!("done!");
             eprintln!("-------------------------------------");
@@ -654,10 +650,8 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
 
             max_score = -100.0;
             for mi in 0..NUM_META as c_int {
-                if mi == 0
-                    || (*meta[mi as usize].tinf).trans_table
-                        != (*meta[(mi - 1) as usize].tinf).trans_table
-                {
+                if mi == 0 || meta_trans_table[mi as usize] != meta_trans_table[(mi - 1) as usize] {
+                    meta_tinf.trans_table = meta_trans_table[mi as usize];
                     std::ptr::write_bytes(nodes, 0, nn as usize);
                     nn = add_nodes(
                         seq,
@@ -667,38 +661,31 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                         closed,
                         mlist.as_mut_ptr(),
                         nmask,
-                        meta[mi as usize].tinf,
+                        &mut meta_tinf,
                     );
                     nodes_vec[..nn as usize]
                         .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
                 }
-                if (*meta[mi as usize].tinf).gc < low || (*meta[mi as usize].tinf).gc > high {
+                if meta_gc[mi as usize] < low || meta_gc[mi as usize] > high {
                     continue;
                 }
+                crate::training_data::load_metagenome(mi as usize, &mut meta_tinf);
                 reset_node_scores(nodes, nn);
-                score_nodes(
-                    seq,
-                    rseq,
-                    slen,
-                    nodes,
-                    nn,
-                    meta[mi as usize].tinf,
-                    closed,
-                    is_meta,
-                );
-                record_overlapping_starts(nodes, nn, meta[mi as usize].tinf, 1);
-                ipath = dprog(nodes, nn, meta[mi as usize].tinf, 1);
+                score_nodes(seq, rseq, slen, nodes, nn, &mut meta_tinf, closed, is_meta);
+                record_overlapping_starts(nodes, nn, &mut meta_tinf, 1);
+                ipath = dprog(nodes, nn, &mut meta_tinf, 1);
                 if (*nodes.offset(ipath as isize)).score > max_score {
                     max_phase = mi;
                     max_score = (*nodes.offset(ipath as isize)).score;
-                    eliminate_bad_genes(nodes, ipath, meta[mi as usize].tinf);
+                    eliminate_bad_genes(nodes, ipath, &mut meta_tinf);
                     ng = add_genes(genes, nodes, ipath);
-                    tweak_final_starts(genes, ng, nodes, nn, meta[mi as usize].tinf);
-                    record_gene_data(genes, ng, nodes, meta[mi as usize].tinf, num_seq);
+                    tweak_final_starts(genes, ng, nodes, nn, &mut meta_tinf);
+                    record_gene_data(genes, ng, nodes, &mut meta_tinf, num_seq);
                 }
             }
 
             // Recover the nodes for the best run
+            crate::training_data::load_metagenome(max_phase as usize, &mut best_tinf);
             std::ptr::write_bytes(nodes, 0, nn as usize);
             nn = add_nodes(
                 seq,
@@ -708,26 +695,17 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 closed,
                 mlist.as_mut_ptr(),
                 nmask,
-                meta[max_phase as usize].tinf,
+                &mut best_tinf,
             );
             nodes_vec[..nn as usize]
                 .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
-            score_nodes(
-                seq,
-                rseq,
-                slen,
-                nodes,
-                nn,
-                meta[max_phase as usize].tinf,
-                closed,
-                is_meta,
-            );
+            score_nodes(seq, rseq, slen, nodes, nn, &mut best_tinf, closed, is_meta);
             if start_ptr != stdout_fd {
                 write_start_file(
                     start_ptr,
                     nodes,
                     nn,
-                    meta[max_phase as usize].tinf,
+                    &mut best_tinf,
                     num_seq,
                     slen,
                     1,
@@ -752,7 +730,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 num_seq,
                 1,
                 meta[max_phase as usize].desc.as_mut_ptr(),
-                meta[max_phase as usize].tinf,
+                &mut best_tinf,
                 cur_header.as_mut_ptr(),
                 short_header.as_mut_ptr(),
                 VERSION_CSTR.as_ptr() as *mut c_char,
@@ -768,7 +746,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                     rseq,
                     useq,
                     slen,
-                    meta[max_phase as usize].tinf,
+                    &mut best_tinf,
                     num_seq,
                     short_header.as_mut_ptr(),
                 );
@@ -783,7 +761,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                     rseq,
                     useq,
                     slen,
-                    meta[max_phase as usize].tinf,
+                    &mut best_tinf,
                     num_seq,
                     short_header.as_mut_ptr(),
                 );
@@ -815,11 +793,6 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     if num_seq == 0 {
         eprintln!("\nError:  no input sequences to analyze.\n");
         return 18;
-    }
-
-    // Free metagenomic training data (allocated with Box)
-    for ptr in &meta_tinf_ptrs {
-        drop(Box::from_raw(*ptr));
     }
 
     // Close all filehandles

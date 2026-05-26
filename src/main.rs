@@ -62,10 +62,34 @@ struct Cli {
     train_file: Option<String>,
 }
 
+fn normalize_c_short_options() -> Vec<String> {
+    std::env::args()
+        .map(|arg| match arg.as_str() {
+            "-A" => "-a".to_string(),
+            "-C" => "-c".to_string(),
+            "-D" => "-d".to_string(),
+            "-F" => "-f".to_string(),
+            "-G" => "-g".to_string(),
+            "-H" => "-h".to_string(),
+            "-I" => "-i".to_string(),
+            "-M" => "-m".to_string(),
+            "-N" => "-n".to_string(),
+            "-O" => "-o".to_string(),
+            "-P" => "-p".to_string(),
+            "-Q" => "-q".to_string(),
+            "-S" => "-s".to_string(),
+            "-T" => "-t".to_string(),
+            "-v" => "--version".to_string(),
+            "-V" => "--version".to_string(),
+            _ => arg,
+        })
+        .collect()
+}
+
 /// CLI entry point: parses command-line arguments, validates the output format,
 /// translation table, and meta/single mode, then dispatches to `run_pipeline`.
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(normalize_c_short_options());
 
     let output_format = match cli.output_format.as_deref() {
         None => 0,

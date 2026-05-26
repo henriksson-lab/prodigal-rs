@@ -2286,6 +2286,7 @@ pub unsafe fn build_coverage_map(
 /// an RBS for the second gene. In addition, we add a slight bonus when genes
 /// are close and a slight penalty when switching strands or having a large
 /// intergenic space.
+#[inline(always)]
 pub unsafe fn intergenic_mod(n1: *mut Node, n2: *mut Node, tinf: *mut Training) -> f64 {
     let mut rval: f64 = 0.0;
     let mut ovlp: f64 = 0.0;

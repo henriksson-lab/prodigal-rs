@@ -6,12 +6,14 @@ use flate2::read::GzDecoder;
 
 /// Opaque sequence reader that handles both plain and gzip-compressed files.
 /// Passed through the pipeline as `*mut c_void`.
-pub struct SeqReader {
-    inner: BufReader<Box<dyn ReadSeek>>,
+pub enum SeqReader {
+    Plain(BufReader<File>),
+    Gzip {
+        path: String,
+        inner: BufReader<GzDecoder<File>>,
+    },
+    Memory(BufReader<Cursor<Vec<u8>>>),
 }
-
-trait ReadSeek: Read + Seek {}
-impl<T: Read + Seek> ReadSeek for T {}
 
 impl SeqReader {
     /// Open a file, auto-detecting gzip by magic bytes.
@@ -24,17 +26,12 @@ impl SeqReader {
         file.seek(SeekFrom::Start(0))?;
 
         if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-            // Gzip: decompress entire file into memory (MAX_SEQ is 32MB, fine)
-            let mut decoder = GzDecoder::new(file);
-            let mut data = Vec::new();
-            decoder.read_to_end(&mut data)?;
-            Ok(SeqReader {
-                inner: BufReader::new(Box::new(Cursor::new(data))),
+            Ok(SeqReader::Gzip {
+                path: path.to_string(),
+                inner: BufReader::new(GzDecoder::new(file)),
             })
         } else {
-            Ok(SeqReader {
-                inner: BufReader::new(Box::new(file)),
-            })
+            Ok(SeqReader::Plain(BufReader::new(file)))
         }
     }
 
@@ -43,9 +40,15 @@ impl SeqReader {
     pub fn stdin() -> io::Result<Self> {
         let mut data = Vec::new();
         io::stdin().read_to_end(&mut data)?;
-        Ok(SeqReader {
-            inner: BufReader::new(Box::new(Cursor::new(data))),
-        })
+        Ok(SeqReader::Memory(BufReader::new(Cursor::new(data))))
+    }
+
+    fn inner_mut(&mut self) -> &mut dyn BufRead {
+        match self {
+            SeqReader::Plain(inner) => inner,
+            SeqReader::Gzip { inner, .. } => inner,
+            SeqReader::Memory(inner) => inner,
+        }
     }
 
     /// Read a line (up to `max_len - 1` bytes) into the provided C buffer.
@@ -62,12 +65,12 @@ impl SeqReader {
             *buf = 0;
         }
 
-        let mut line = Vec::new();
         let mut total = 0usize;
 
-        // Read byte by byte from the buffered reader until newline or max-1
+        // Copy directly from the buffered reader until newline or max-1.
         loop {
-            let available = self.inner.fill_buf().unwrap_or(&[]);
+            let inner = self.inner_mut();
+            let available = inner.fill_buf().unwrap_or(&[]);
             if available.is_empty() {
                 break; // EOF
             }
@@ -76,35 +79,50 @@ impl SeqReader {
             let limit = (max - 1 - total).min(available.len());
             let mut consumed = 0;
             for i in 0..limit {
-                line.push(available[i]);
+                unsafe {
+                    *(buf as *mut u8).add(total) = available[i];
+                }
                 consumed = i + 1;
                 total += 1;
                 if available[i] == b'\n' {
                     break;
                 }
             }
-            self.inner.consume(consumed);
+            inner.consume(consumed);
 
-            if total >= max - 1 || line.last() == Some(&b'\n') {
+            if consumed == 0 {
+                break;
+            }
+            let last = unsafe { *(buf as *const u8).add(total - 1) };
+            if total >= max - 1 || last == b'\n' {
                 break;
             }
         }
 
-        if line.is_empty() {
+        if total == 0 {
             return false;
         }
 
-        // Copy to C buffer with NUL terminator
+        // NUL terminator
         unsafe {
-            std::ptr::copy_nonoverlapping(line.as_ptr(), buf as *mut u8, line.len());
-            *buf.add(line.len()) = 0;
+            *buf.add(total) = 0;
         }
         true
     }
 
     /// Seek to beginning of the stream.
     pub fn rewind(&mut self) -> bool {
-        self.inner.seek(SeekFrom::Start(0)).is_ok()
+        match self {
+            SeqReader::Plain(inner) => inner.seek(SeekFrom::Start(0)).is_ok(),
+            SeqReader::Gzip { path, inner } => match File::open(path) {
+                Ok(file) => {
+                    *inner = BufReader::new(GzDecoder::new(file));
+                    true
+                }
+                Err(_) => false,
+            },
+            SeqReader::Memory(inner) => inner.seek(SeekFrom::Start(0)).is_ok(),
+        }
     }
 }
 

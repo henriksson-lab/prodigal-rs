@@ -4,6 +4,8 @@ Pure Rust translation of [Prodigal](https://github.com/hyattpd/Prodigal) — a p
 
 Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
 
+* 2025-05-26 - new audit. only improved performance, now on par or faster
+* 2025-05-16 - docstrings
 * 2025-05-11 - Added batch mode to reduce memory allocations
 * 2026-05-10 - 4 bugs fixed in a renewed audit
 * 2026-04-23 - Code is ready for testing on real data, but stay vigilant for remaining errors. Compare with regular Prodigal on your data before considering this as a replacement. 
@@ -232,16 +234,16 @@ cargo package --allow-dirty
 
 ## Performance
 
-Local release-build comparison against the bundled original C `Prodigal/prodigal`, using `/usr/bin/time` on real FASTA inputs already present in the workspace. These are evaluation benchmarks only; they are not meant as a general performance claim across environments.
+Local release-build comparison against the bundled original C `Prodigal/prodigal`, using `/usr/bin/time -f "%e %M"` on real FASTA inputs already present in the workspace. Three-run cases report median wall time. These are evaluation benchmarks only; they are not meant as a general performance claim across environments.
 
-| Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Output |
-|-------|------|------:|------:|---------:|------:|----------:|-------------:|--------|
-| `prokka genome` | `single` | 6.7 MB | 15.69 s | 13.03 s | 0.83x | 172344 KB | 281600 KB | identical GFF |
-| `prokka genome` | `meta` | 6.7 MB | 74.82 s | 62.35 s | 0.83x | 127708 KB | 233600 KB | identical GFF |
-| `priestia` | `single` | 5.4 MB | 8.56 s | 6.87 s | 0.80x | 120136 KB | 234560 KB | identical GFF |
-| `priestia` | `meta` | 5.4 MB | 30.95 s | 27.04 s | 0.87x | 96968 KB | 206080 KB | identical GFF |
+| Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Rust/C RSS |
+|-------|------|------:|------:|---------:|------:|----------:|-------------:|-----------:|
+| `prokka genome` | `single` | 6.7 MB | 16.22 s | 10.09 s | 0.62x | 172384 KB | 282560 KB | 1.64x |
+| `prokka genome` | `meta` | 6.7 MB | 66.84 s | 41.97 s | 0.63x | 127712 KB | 208000 KB | 1.63x |
+| `prokka plasmid` | `single` | small | 0.09 s | 0.08 s | 0.89x | 4160 KB | 52480 KB | 12.62x |
+| `prokka plasmid` | `meta` | small | 0.32 s | 0.22 s | 0.69x | 43200 KB | 79680 KB | 1.84x |
 
-Current memory note: the Rust port is faster on these measured runs, but it currently uses about 1.6-2.1x the peak RSS. A likely major reason is that the Rust node buffer grows with `Vec::resize(..., zeroed())`, which materializes the entire new tail in memory, whereas the original C code uses `realloc` and only touches the subset of nodes that are actually populated.
+Current memory note: the Rust port is faster on these measured runs, but it still uses about 1.6x the peak RSS on real-size inputs. Tiny inputs show a much higher relative RSS because Rust has a larger fixed memory floor.
 
 ## License
 

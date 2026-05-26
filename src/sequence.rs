@@ -444,43 +444,41 @@ pub unsafe fn rcom_seq(seq: *mut u8, rseq: *mut u8, useq: *mut u8, len: c_int) {
 /* a, c, t, g, starts, stops, etc. */
 
 /// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'A', else 0.
+#[inline(always)]
 pub unsafe fn is_a(seq: *mut u8, n: c_int) -> c_int {
-    let ndx = n * 2;
-    if test(seq, ndx) == 1 || test(seq, ndx + 1) == 1 {
-        return 0;
-    }
-    1
+    (base_code(seq, n) == 0) as c_int
 }
 
 /// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'C', else 0.
+#[inline(always)]
 pub unsafe fn is_c(seq: *mut u8, n: c_int) -> c_int {
-    let ndx = n * 2;
-    if test(seq, ndx) == 1 || test(seq, ndx + 1) == 0 {
-        return 0;
-    }
-    1
+    (base_code(seq, n) == 2) as c_int
 }
 
 /// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'G', else 0.
+#[inline(always)]
 pub unsafe fn is_g(seq: *mut u8, n: c_int) -> c_int {
-    let ndx = n * 2;
-    if test(seq, ndx) == 0 || test(seq, ndx + 1) == 1 {
-        return 0;
-    }
-    1
+    (base_code(seq, n) == 1) as c_int
 }
 
 /// Returns 1 if the base at position `n` in the 2-bit packed `seq` is 'T', else 0.
+#[inline(always)]
 pub unsafe fn is_t(seq: *mut u8, n: c_int) -> c_int {
+    (base_code(seq, n) == 3) as c_int
+}
+
+#[inline(always)]
+unsafe fn base_code(seq: *const u8, n: c_int) -> u8 {
+    debug_assert!(!seq.is_null());
+    debug_assert!(n >= 0);
     let ndx = n * 2;
-    if test(seq, ndx) == 0 || test(seq, ndx + 1) == 0 {
-        return 0;
-    }
-    1
+    let byte = *seq.add((ndx >> 3) as usize);
+    (byte >> (ndx & 0x07)) & 0x03
 }
 
 /// Returns 1 if position `n` is marked as an unknown/'N' base in the unknown-mask
 /// bitmap `useq`, else 0.
+#[inline(always)]
 pub unsafe fn is_n(useq: *mut u8, n: c_int) -> c_int {
     if test(useq, n) == 0 {
         return 0;
@@ -584,7 +582,7 @@ pub unsafe fn is_start(seq: *mut u8, n: c_int, tinf: *mut Training) -> c_int {
 }
 
 /// Returns 1 if the codon at position `n` is literally ATG, else 0.
-#[inline]
+#[inline(always)]
 pub unsafe fn is_atg(seq: *mut u8, n: c_int) -> c_int {
     if is_a(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
@@ -593,7 +591,7 @@ pub unsafe fn is_atg(seq: *mut u8, n: c_int) -> c_int {
 }
 
 /// Returns 1 if the codon at position `n` is literally GTG, else 0.
-#[inline]
+#[inline(always)]
 pub unsafe fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
     if is_g(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
@@ -602,7 +600,7 @@ pub unsafe fn is_gtg(seq: *mut u8, n: c_int) -> c_int {
 }
 
 /// Returns 1 if the codon at position `n` is literally TTG, else 0.
-#[inline]
+#[inline(always)]
 pub unsafe fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
     if is_t(seq, n) == 0 || is_t(seq, n + 1) == 0 || is_g(seq, n + 2) == 0 {
         return 0;
@@ -612,7 +610,7 @@ pub unsafe fn is_ttg(seq: *mut u8, n: c_int) -> c_int {
 
 /// Returns 1 if the base at position `n` is G or C (i.e. the two packed bits
 /// differ), else 0.
-#[inline]
+#[inline(always)]
 pub unsafe fn is_gc(seq: *mut u8, n: c_int) -> c_int {
     let ndx = n * 2;
     if test(seq, ndx) != test(seq, ndx + 1) {
@@ -1152,22 +1150,20 @@ pub unsafe fn shine_dalgarno_exact(
     rwt: *mut c_double,
 ) -> c_int {
     let mut cur_val: c_int = 0;
-    let mut match_: [c_double; 6] = [0.0; 6];
-    let mut cur_ctr: c_double;
-    let mut dis_flag: c_double;
+    let mut match_: [c_int; 6] = [-10; 6];
+    let mut cur_ctr: c_int;
+    let mut dis_flag: c_int;
 
     let limit = imin(6, start - 4 - pos);
-    for i in 0..6 {
-        match_[i] = -10.0;
-    }
 
     /* Compare the 6-base region to AGGAGG */
     for i in 0..limit {
         if pos + i >= 0 {
+            debug_assert!((0..6).contains(&i));
             if i % 3 == 0 && is_a(seq, pos + i) == 1 {
-                match_[i as usize] = 2.0;
+                match_[i as usize] = 2;
             } else if i % 3 != 0 && is_g(seq, pos + i) == 1 {
-                match_[i as usize] = 3.0;
+                match_[i as usize] = 3;
             }
         }
     }
@@ -1177,11 +1173,13 @@ pub unsafe fn shine_dalgarno_exact(
     let mut i = limit;
     while i >= 3 {
         for j in 0..=(limit - i) {
-            cur_ctr = -2.0;
+            cur_ctr = -2;
             let mut mism: c_int = 0;
             for k in j..(j + i) {
-                cur_ctr += match_[k as usize];
-                if match_[k as usize] < 0.0 {
+                debug_assert!((0..6).contains(&k));
+                let match_k = match_[k as usize];
+                cur_ctr += match_k;
+                if match_k < 0 {
                     mism += 1;
                 }
             }
@@ -1190,72 +1188,72 @@ pub unsafe fn shine_dalgarno_exact(
             }
             let rdis = start - (pos + j + i);
             if rdis < 5 && i < 5 {
-                dis_flag = 2.0;
+                dis_flag = 2;
             } else if rdis < 5 && i >= 5 {
-                dis_flag = 1.0;
+                dis_flag = 1;
             } else if rdis > 10 && rdis <= 12 && i < 5 {
-                dis_flag = 1.0;
+                dis_flag = 1;
             } else if rdis > 10 && rdis <= 12 && i >= 5 {
-                dis_flag = 2.0;
+                dis_flag = 2;
             } else if rdis >= 13 {
-                dis_flag = 3.0;
+                dis_flag = 3;
             } else {
-                dis_flag = 0.0;
+                dis_flag = 0;
             }
-            if rdis > 15 || cur_ctr < 6.0 {
+            if rdis > 15 || cur_ctr < 6 {
                 continue;
             }
 
             /* Exact-Matching RBS Motifs */
-            if cur_ctr < 6.0 {
+            if cur_ctr < 6 {
                 cur_val = 0;
-            } else if cur_ctr == 6.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 6 && dis_flag == 2 {
                 cur_val = 1;
-            } else if cur_ctr == 6.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 6 && dis_flag == 3 {
                 cur_val = 2;
-            } else if cur_ctr == 8.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 8 && dis_flag == 3 {
                 cur_val = 3;
-            } else if cur_ctr == 9.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 9 && dis_flag == 3 {
                 cur_val = 3;
-            } else if cur_ctr == 6.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 6 && dis_flag == 1 {
                 cur_val = 6;
-            } else if cur_ctr == 11.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 11 && dis_flag == 3 {
                 cur_val = 10;
-            } else if cur_ctr == 12.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 12 && dis_flag == 3 {
                 cur_val = 10;
-            } else if cur_ctr == 14.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 14 && dis_flag == 3 {
                 cur_val = 10;
-            } else if cur_ctr == 8.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 8 && dis_flag == 2 {
                 cur_val = 11;
-            } else if cur_ctr == 9.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 9 && dis_flag == 2 {
                 cur_val = 11;
-            } else if cur_ctr == 8.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 8 && dis_flag == 1 {
                 cur_val = 12;
-            } else if cur_ctr == 9.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 9 && dis_flag == 1 {
                 cur_val = 12;
-            } else if cur_ctr == 6.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 6 && dis_flag == 0 {
                 cur_val = 13;
-            } else if cur_ctr == 8.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 8 && dis_flag == 0 {
                 cur_val = 15;
-            } else if cur_ctr == 9.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 9 && dis_flag == 0 {
                 cur_val = 16;
-            } else if cur_ctr == 11.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 11 && dis_flag == 2 {
                 cur_val = 20;
-            } else if cur_ctr == 11.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 11 && dis_flag == 1 {
                 cur_val = 21;
-            } else if cur_ctr == 11.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 11 && dis_flag == 0 {
                 cur_val = 22;
-            } else if cur_ctr == 12.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 12 && dis_flag == 2 {
                 cur_val = 20;
-            } else if cur_ctr == 12.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 12 && dis_flag == 1 {
                 cur_val = 23;
-            } else if cur_ctr == 12.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 12 && dis_flag == 0 {
                 cur_val = 24;
-            } else if cur_ctr == 14.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 14 && dis_flag == 2 {
                 cur_val = 25;
-            } else if cur_ctr == 14.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 14 && dis_flag == 1 {
                 cur_val = 26;
-            } else if cur_ctr == 14.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 14 && dis_flag == 0 {
                 cur_val = 27;
             }
 
@@ -1289,29 +1287,27 @@ pub unsafe fn shine_dalgarno_mm(
     rwt: *mut c_double,
 ) -> c_int {
     let mut cur_val: c_int = 0;
-    let mut match_: [c_double; 6] = [0.0; 6];
-    let mut cur_ctr: c_double;
-    let mut dis_flag: c_double;
+    let mut match_: [c_int; 6] = [-10; 6];
+    let mut cur_ctr: c_int;
+    let mut dis_flag: c_int;
 
     let limit = imin(6, start - 4 - pos);
-    for i in 0..6 {
-        match_[i] = -10.0;
-    }
 
     /* Compare the 6-base region to AGGAGG */
     for i in 0..limit {
         if pos + i >= 0 {
+            debug_assert!((0..6).contains(&i));
             if i % 3 == 0 {
                 if is_a(seq, pos + i) == 1 {
-                    match_[i as usize] = 2.0;
+                    match_[i as usize] = 2;
                 } else {
-                    match_[i as usize] = -3.0;
+                    match_[i as usize] = -3;
                 }
             } else {
                 if is_g(seq, pos + i) == 1 {
-                    match_[i as usize] = 3.0;
+                    match_[i as usize] = 3;
                 } else {
-                    match_[i as usize] = -2.0;
+                    match_[i as usize] = -2;
                 }
             }
         }
@@ -1322,15 +1318,17 @@ pub unsafe fn shine_dalgarno_mm(
     let mut i = limit;
     while i >= 5 {
         for j in 0..=(limit - i) {
-            cur_ctr = -2.0;
+            cur_ctr = -2;
             let mut mism: c_int = 0;
             for k in j..(j + i) {
-                cur_ctr += match_[k as usize];
-                if match_[k as usize] < 0.0 {
+                debug_assert!((0..6).contains(&k));
+                let match_k = match_[k as usize];
+                cur_ctr += match_k;
+                if match_k < 0 {
                     mism += 1;
                 }
-                if match_[k as usize] < 0.0 && (k <= j + 1 || k >= j + i - 2) {
-                    cur_ctr -= 10.0;
+                if match_k < 0 && (k <= j + 1 || k >= j + i - 2) {
+                    cur_ctr -= 10;
                 }
             }
             if mism != 1 {
@@ -1338,44 +1336,44 @@ pub unsafe fn shine_dalgarno_mm(
             }
             let rdis = start - (pos + j + i);
             if rdis < 5 {
-                dis_flag = 1.0;
+                dis_flag = 1;
             } else if rdis > 10 && rdis <= 12 {
-                dis_flag = 2.0;
+                dis_flag = 2;
             } else if rdis >= 13 {
-                dis_flag = 3.0;
+                dis_flag = 3;
             } else {
-                dis_flag = 0.0;
+                dis_flag = 0;
             }
-            if rdis > 15 || cur_ctr < 6.0 {
+            if rdis > 15 || cur_ctr < 6 {
                 continue;
             }
 
             /* Single-Mismatch RBS Motifs */
-            if cur_ctr < 6.0 {
+            if cur_ctr < 6 {
                 cur_val = 0;
-            } else if cur_ctr == 6.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 6 && dis_flag == 3 {
                 cur_val = 2;
-            } else if cur_ctr == 7.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 7 && dis_flag == 3 {
                 cur_val = 2;
-            } else if cur_ctr == 9.0 && dis_flag == 3.0 {
+            } else if cur_ctr == 9 && dis_flag == 3 {
                 cur_val = 3;
-            } else if cur_ctr == 6.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 6 && dis_flag == 2 {
                 cur_val = 4;
-            } else if cur_ctr == 6.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 6 && dis_flag == 1 {
                 cur_val = 5;
-            } else if cur_ctr == 6.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 6 && dis_flag == 0 {
                 cur_val = 9;
-            } else if cur_ctr == 7.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 7 && dis_flag == 2 {
                 cur_val = 7;
-            } else if cur_ctr == 7.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 7 && dis_flag == 1 {
                 cur_val = 8;
-            } else if cur_ctr == 7.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 7 && dis_flag == 0 {
                 cur_val = 14;
-            } else if cur_ctr == 9.0 && dis_flag == 2.0 {
+            } else if cur_ctr == 9 && dis_flag == 2 {
                 cur_val = 17;
-            } else if cur_ctr == 9.0 && dis_flag == 1.0 {
+            } else if cur_ctr == 9 && dis_flag == 1 {
                 cur_val = 18;
-            } else if cur_ctr == 9.0 && dis_flag == 0.0 {
+            } else if cur_ctr == 9 && dis_flag == 0 {
                 cur_val = 19;
             }
 

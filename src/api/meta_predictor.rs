@@ -13,7 +13,7 @@ use rayon::ThreadPool;
 use super::convert::gene_to_predicted;
 use super::encode::SequenceBuffer;
 use super::types::{PredictedGene, ProdigalConfig, ProdigalError};
-use crate::types::{Gene, Node, Training, MAX_GENES, MAX_SEQ, NUM_META};
+use crate::types::{Gene, Training, MAX_GENES, MAX_SEQ, NUM_META};
 
 use super::predict::validate_config;
 
@@ -144,19 +144,9 @@ fn load_meta_models() -> Vec<Box<Training>> {
     models
 }
 
-/// Nodes built for one translation table, shared across models in that group.
-struct TransTableGroup {
-    /// Indices into the models array for qualifying (GC-filtered) models.
-    model_indices: Vec<usize>,
-    /// Template node array (built once by add_nodes + sort).
-    nodes: Vec<Node>,
-    /// Number of valid nodes.
-    nn: c_int,
-}
-
 /// Run the metagenomic gene-prediction pipeline on a single sequence.
 ///
-/// Encodes the input, builds node arrays once per translation-table group,
+/// Encodes the input, rebuilds node arrays when the translation table changes,
 /// scores all GC-compatible models, keeps the highest-scoring solution, and
 /// converts its genes to `PredictedGene` values.
 fn predict_parallel(
@@ -166,7 +156,7 @@ fn predict_parallel(
 ) -> Result<Vec<PredictedGene>, ProdigalError> {
     let closed = if config.closed_ends { 1 } else { 0 };
 
-    let mut buf = SequenceBuffer::new();
+    let mut buf = SequenceBuffer::with_base_capacity(seq.len());
     let (slen, gc) = unsafe { buf.encode(seq, config.mask_n_runs) };
     if slen == 0 {
         return Err(ProdigalError::EmptySequence);
@@ -183,19 +173,18 @@ fn predict_parallel(
         high = 0.35;
     }
 
-    // Phase 1: Build node arrays per translation table group,
-    // filtering models by GC range.
-    let mut groups: Vec<TransTableGroup> = Vec::new();
+    let mut best_score = f64::NEG_INFINITY;
+    let mut best_nodes = Vec::new();
+    let mut best_genes: Vec<Gene> = Vec::new();
+    let mut best_tinf: Option<Training> = None;
     let mut nn: c_int = 0;
 
-    for i in 0..NUM_META {
-        let need_rebuild = i == 0 || models[i].trans_table != models[i - 1].trans_table;
+    unsafe {
+        for i in 0..NUM_META {
+            let need_rebuild = i == 0 || models[i].trans_table != models[i - 1].trans_table;
+            let mut tinf = (*models[i]).clone();
 
-        if need_rebuild {
-            // Build nodes for this translation table
-            // We need a mutable Training pointer but add_nodes only reads from it
-            let mut tinf_copy = (*models[i]).clone();
-            unsafe {
+            if need_rebuild {
                 buf.clear_nodes(nn);
                 nn = add_nodes(
                     buf.seq.as_mut_ptr(),
@@ -205,71 +194,52 @@ fn predict_parallel(
                     closed,
                     buf.masks.as_mut_ptr(),
                     buf.nmask,
-                    &mut tinf_copy,
-                );
-            }
-            buf.nodes[..nn as usize]
-                .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
-
-            groups.push(TransTableGroup {
-                model_indices: Vec::new(),
-                nodes: buf.nodes[..nn as usize].to_vec(),
-                nn,
-            });
-        }
-
-        // GC filter
-        if models[i].gc >= low && models[i].gc <= high {
-            groups.last_mut().unwrap().model_indices.push(i);
-        }
-    }
-
-    let mut best_score = f64::NEG_INFINITY;
-    let mut best_nodes = Vec::new();
-    let mut best_genes: Vec<Gene> = Vec::new();
-    let mut best_tinf: Option<Training> = None;
-
-    unsafe {
-        for group in groups.iter_mut() {
-            for &model_idx in &group.model_indices {
-                let mut tinf = (*models[model_idx]).clone();
-                reset_node_scores(group.nodes.as_mut_ptr(), group.nn);
-                score_nodes(
-                    buf.seq.as_mut_ptr(),
-                    buf.rseq.as_mut_ptr(),
-                    slen,
-                    group.nodes.as_mut_ptr(),
-                    group.nn,
                     &mut tinf,
-                    closed,
-                    1,
                 );
-                record_overlapping_starts(group.nodes.as_mut_ptr(), group.nn, &mut tinf, 1);
-                let ipath = dprog(group.nodes.as_mut_ptr(), group.nn, &mut tinf, 1);
-                if ipath < 0 || ipath >= group.nn {
-                    continue;
-                }
+                buf.nodes[..nn as usize]
+                    .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
+            }
 
-                let score = group.nodes[ipath as usize].score;
-                if score > best_score {
-                    best_score = score;
-                    eliminate_bad_genes(group.nodes.as_mut_ptr(), ipath, &mut tinf);
+            if tinf.gc < low || tinf.gc > high {
+                continue;
+            }
 
-                    let mut genes: Vec<Gene> = vec![std::mem::zeroed(); MAX_GENES];
-                    let ng = add_genes(genes.as_mut_ptr(), group.nodes.as_mut_ptr(), ipath);
-                    tweak_final_starts(
-                        genes.as_mut_ptr(),
-                        ng,
-                        group.nodes.as_mut_ptr(),
-                        group.nn,
-                        &mut tinf,
-                    );
-                    genes.truncate(ng as usize);
+            reset_node_scores(buf.nodes.as_mut_ptr(), nn);
+            score_nodes(
+                buf.seq.as_mut_ptr(),
+                buf.rseq.as_mut_ptr(),
+                slen,
+                buf.nodes.as_mut_ptr(),
+                nn,
+                &mut tinf,
+                closed,
+                1,
+            );
+            record_overlapping_starts(buf.nodes.as_mut_ptr(), nn, &mut tinf, 1);
+            let ipath = dprog(buf.nodes.as_mut_ptr(), nn, &mut tinf, 1);
+            if ipath < 0 || ipath >= nn {
+                continue;
+            }
 
-                    best_nodes = group.nodes.clone();
-                    best_genes = genes;
-                    best_tinf = Some(tinf);
-                }
+            let score = buf.nodes[ipath as usize].score;
+            if score > best_score {
+                best_score = score;
+                eliminate_bad_genes(buf.nodes.as_mut_ptr(), ipath, &mut tinf);
+
+                let mut genes: Vec<Gene> = vec![std::mem::zeroed(); MAX_GENES];
+                let ng = add_genes(genes.as_mut_ptr(), buf.nodes.as_mut_ptr(), ipath);
+                tweak_final_starts(
+                    genes.as_mut_ptr(),
+                    ng,
+                    buf.nodes.as_mut_ptr(),
+                    nn,
+                    &mut tinf,
+                );
+                genes.truncate(ng as usize);
+
+                best_nodes = buf.nodes[..nn as usize].to_vec();
+                best_genes = genes;
+                best_tinf = Some(tinf);
             }
         }
     }

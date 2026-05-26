@@ -9,19 +9,21 @@ use crate::types::{Training, MAX_SEQ, NUM_META};
 const MIN_SINGLE_GENOME: usize = 20_000;
 const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MB
 
-/// Run a closure on a thread with a large stack to accommodate
+/// Run a closure on a scoped thread with a large stack to accommodate
 /// the deep call stacks of the internal prediction functions.
 fn with_large_stack<F, T>(f: F) -> T
 where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
+    F: FnOnce() -> T + Send,
+    T: Send,
 {
-    std::thread::Builder::new()
-        .stack_size(STACK_SIZE)
-        .spawn(f)
-        .expect("failed to spawn worker thread")
-        .join()
-        .expect("worker thread panicked")
+    std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(STACK_SIZE)
+            .spawn_scoped(scope, f)
+            .expect("failed to spawn worker thread")
+            .join()
+            .expect("worker thread panicked")
+    })
 }
 
 use crate::dprog::{dprog, eliminate_bad_genes};
@@ -55,9 +57,7 @@ pub fn predict_meta_with(
     if seq.is_empty() {
         return Err(ProdigalError::EmptySequence);
     }
-    let seq = seq.to_vec();
-    let config = config.clone();
-    with_large_stack(move || predict_meta_inner(&seq, &config))
+    with_large_stack(|| predict_meta_inner(seq, config))
 }
 
 /// Single-threaded metagenomic prediction core.
@@ -79,7 +79,7 @@ fn predict_meta_inner(
         });
     }
 
-    let mut buf = SequenceBuffer::new();
+    let mut buf = SequenceBuffer::with_base_capacity(seq.len());
     let closed = if config.closed_ends { 1 } else { 0 };
 
     // Initialize 50 metagenomic models
@@ -206,9 +206,7 @@ pub fn train_with(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, P
     if seq.is_empty() {
         return Err(ProdigalError::EmptySequence);
     }
-    let seq = seq.to_vec();
-    let config = config.clone();
-    with_large_stack(move || train_inner(&seq, &config))
+    with_large_stack(|| train_inner(seq, config))
 }
 
 /// Core single-genome training routine.
@@ -218,7 +216,7 @@ pub fn train_with(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, P
 /// trains RBS/start-codon weights (SD or non-SD) and returns the learned
 /// `TrainingData`.
 fn train_inner(seq: &[u8], config: &ProdigalConfig) -> Result<TrainingData, ProdigalError> {
-    let mut buf = SequenceBuffer::new();
+    let mut buf = SequenceBuffer::with_base_capacity(seq.len() + 24);
     let mut tinf = Box::new(unsafe { std::mem::zeroed::<Training>() });
     tinf.st_wt = 4.35;
     tinf.trans_table = config.translation_table as c_int;
@@ -340,10 +338,7 @@ pub fn predict_with(
             max: MAX_SEQ,
         });
     }
-    let seq = seq.to_vec();
-    let config = config.clone();
-    let training = training.clone();
-    with_large_stack(move || predict_inner(&seq, &training, &config))
+    with_large_stack(|| predict_inner(seq, training, config))
 }
 
 /// Core single-genome prediction routine.
@@ -356,7 +351,7 @@ fn predict_inner(
     training: &TrainingData,
     config: &ProdigalConfig,
 ) -> Result<Vec<PredictedGene>, ProdigalError> {
-    let mut buf = SequenceBuffer::new();
+    let mut buf = SequenceBuffer::with_base_capacity(seq.len());
     let closed = if config.closed_ends { 1 } else { 0 };
 
     // We need a mutable copy of training for the internal functions (keep on heap — 558KB)

@@ -18,11 +18,20 @@ pub(crate) struct SequenceBuffer {
 impl SequenceBuffer {
     /// Allocate a fresh scratch buffer with capacity for `MAX_SEQ` bases and
     /// the default node/gene/mask counts.
+    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::with_base_capacity(MAX_SEQ)
+    }
+
+    /// Allocate a fresh scratch buffer sized for a known input upper bound.
+    pub fn with_base_capacity(max_bases: usize) -> Self {
+        let max_bases = max_bases.min(MAX_SEQ);
+        let seq_bytes = (max_bases / 4 + 2).max(1);
+        let useq_bytes = (max_bases / 8 + 2).max(1);
         SequenceBuffer {
-            seq: vec![0u8; MAX_SEQ / 4],
-            rseq: vec![0u8; MAX_SEQ / 4],
-            useq: vec![0u8; MAX_SEQ / 8],
+            seq: vec![0u8; seq_bytes],
+            rseq: vec![0u8; seq_bytes],
+            useq: vec![0u8; useq_bytes],
             nodes: vec![unsafe { std::mem::zeroed() }; STT_NOD],
             genes: vec![unsafe { std::mem::zeroed() }; MAX_GENES],
             masks: vec![unsafe { std::mem::zeroed() }; MAX_MASKS],

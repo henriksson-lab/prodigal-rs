@@ -149,3 +149,30 @@ pub unsafe fn initialize_metagenomic_bins(meta: *mut MetagenomicBin) {
         std::ptr::copy_nonoverlapping(s.as_ptr(), m.desc.as_mut_ptr() as *mut u8, s.len().min(500));
     }
 }
+
+/// Initialize only the small metagenomic metadata needed by the CLI.
+///
+/// The full C implementation keeps all 50 `Training` structs resident.  The
+/// Rust CLI can instead keep GC/table metadata and descriptions, then load a
+/// single model into a reusable `Training` buffer while scoring.
+pub unsafe fn initialize_metagenomic_metadata(
+    meta: *mut MetagenomicBin,
+    gc: *mut f64,
+    trans_table: *mut i32,
+) {
+    let mut tinf: Training = std::mem::zeroed();
+    for i in 0..50 {
+        crate::training_data::load_metagenome(i, &mut tinf);
+        *gc.add(i) = tinf.gc;
+        *trans_table.add(i) = tinf.trans_table;
+
+        let m = &mut *meta.add(i);
+        let name = std::str::from_utf8_unchecked(&DESCS[i].0[..DESCS[i].0.len() - 1]);
+        let domain = std::str::from_utf8_unchecked(&DESCS[i].1[..DESCS[i].1.len() - 1]);
+        let s = format!(
+            "{}|{}|{}|{:.1}|{}|{}\0",
+            i, name, domain, DESCS[i].2, tinf.trans_table, tinf.uses_sd
+        );
+        std::ptr::copy_nonoverlapping(s.as_ptr(), m.desc.as_mut_ptr() as *mut u8, s.len().min(500));
+    }
+}
