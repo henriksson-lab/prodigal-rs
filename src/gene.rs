@@ -58,6 +58,11 @@ unsafe fn append_to_cbuf(buf: &mut [c_char], s: &str) {
     buf[pos + len] = 0;
 }
 
+#[inline]
+unsafe fn clear_gene(glist: *mut Gene, ctr: c_int) {
+    std::ptr::write(glist.offset(ctr as isize), std::mem::zeroed());
+}
+
 /// Copies genes from the dynamic programming to a final array.
 pub unsafe fn add_genes(glist: *mut Gene, nod: *mut Node, dbeg: c_int) -> c_int {
     if dbeg == -1 {
@@ -78,10 +83,12 @@ pub unsafe fn add_genes(glist: *mut Gene, nod: *mut Node, dbeg: c_int) -> c_int 
             continue;
         }
         if np.strand == 1 && np.type_ != STOP {
+            clear_gene(glist, ctr);
             (*glist.offset(ctr as isize)).begin = np.ndx + 1;
             (*glist.offset(ctr as isize)).start_ndx = path;
         }
         if np.strand == -1 && np.type_ == STOP {
+            clear_gene(glist, ctr);
             (*glist.offset(ctr as isize)).begin = np.ndx - 1;
             (*glist.offset(ctr as isize)).stop_ndx = path;
         }

@@ -238,12 +238,12 @@ Local release-build comparison against the bundled original C `Prodigal/prodigal
 
 | Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Rust/C RSS |
 |-------|------|------:|------:|---------:|------:|----------:|-------------:|-----------:|
-| `prokka genome` | `single` | 6.7 MB | 16.22 s | 10.09 s | 0.62x | 172384 KB | 282560 KB | 1.64x |
-| `prokka genome` | `meta` | 6.7 MB | 66.84 s | 41.97 s | 0.63x | 127712 KB | 208000 KB | 1.63x |
-| `prokka plasmid` | `single` | small | 0.09 s | 0.08 s | 0.89x | 4160 KB | 52480 KB | 12.62x |
-| `prokka plasmid` | `meta` | small | 0.32 s | 0.22 s | 0.69x | 43200 KB | 79680 KB | 1.84x |
+| `prokka genome` | `single` | 6.7 MB | 17.84 s | 10.85 s | 0.61x | 172164 KB | 174400 KB | 1.01x |
+| `prokka genome` | `meta` | 6.7 MB | 88.78 s | 50.17 s | 0.57x | 127712 KB | 111360 KB | 0.87x |
+| `prokka plasmid` | `single` | small | 0.08 s | 0.05 s | 0.63x | 4160 KB | 5760 KB | 1.38x |
+| `prokka plasmid` | `meta` | small | 0.32 s | 0.19 s | 0.59x | 43200 KB | 32960 KB | 0.76x |
 
-Current memory note: the Rust port is faster on these measured runs, but it still uses about 1.6x the peak RSS on real-size inputs. Tiny inputs show a much higher relative RSS because Rust has a larger fixed memory floor.
+Current memory note: after switching the CLI work buffers to reserve node/gene storage without eagerly zeroing the full capacity, peak RSS is now roughly at parity with the bundled C binary on the full single-genome run (1.01x Rust/C) and lower than C on the measured metagenomic runs (0.87x on the full genome, 0.76x on the plasmid). Tiny single-genome inputs still show a small fixed Rust overhead (1.38x here), but the previous large fixed RSS floor has been removed.
 
 ## License
 

@@ -48,6 +48,13 @@ unsafe fn cstr(p: *const c_char) -> &'static str {
     }
 }
 
+#[inline]
+unsafe fn clear_next_node(nodes: *mut Node, nn: c_int) -> *mut Node {
+    let node = nodes.offset(nn as isize);
+    std::ptr::write(node, std::mem::zeroed());
+    node
+}
+
 /*******************************************************************************
   Adds nodes to the node list.  Genes must be >=90bp in length, unless they
   run off the edge, in which case they only have to be 50bp.
@@ -89,13 +96,14 @@ pub unsafe fn add_nodes(
     while i >= 0 {
         if is_stop(seq, i, tinf) == 1 {
             if saw_start[(i % 3) as usize] == 1 {
+                let node = clear_next_node(nodes, nn);
                 if is_stop(seq, last[(i % 3) as usize], tinf) == 0 {
-                    (*nodes.offset(nn as isize)).edge = 1;
+                    (*node).edge = 1;
                 }
-                (*nodes.offset(nn as isize)).ndx = last[(i % 3) as usize];
-                (*nodes.offset(nn as isize)).type_ = STOP;
-                (*nodes.offset(nn as isize)).strand = 1;
-                (*nodes.offset(nn as isize)).stop_val = i;
+                (*node).ndx = last[(i % 3) as usize];
+                (*node).type_ = STOP;
+                (*node).strand = 1;
+                (*node).stop_val = i;
                 nn += 1;
             }
             min_dist[(i % 3) as usize] = MIN_GENE;
@@ -114,58 +122,63 @@ pub unsafe fn add_nodes(
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = i;
-            (*nodes.offset(nn as isize)).type_ = ATG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = i;
+            (*node).type_ = ATG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
-            (*nodes.offset(nn as isize)).strand = 1;
+            (*node).stop_val = last[(i % 3) as usize];
+            (*node).strand = 1;
             nn += 1;
         } else if is_start(seq, i, tinf) == 1
             && is_gtg(seq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = i;
-            (*nodes.offset(nn as isize)).type_ = GTG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = i;
+            (*node).type_ = GTG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
-            (*nodes.offset(nn as isize)).strand = 1;
+            (*node).stop_val = last[(i % 3) as usize];
+            (*node).strand = 1;
             nn += 1;
         } else if is_start(seq, i, tinf) == 1
             && is_ttg(seq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = i;
-            (*nodes.offset(nn as isize)).type_ = TTG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = i;
+            (*node).type_ = TTG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
-            (*nodes.offset(nn as isize)).strand = 1;
+            (*node).stop_val = last[(i % 3) as usize];
+            (*node).strand = 1;
             nn += 1;
         } else if i <= 2
             && closed == 0
             && (last[(i % 3) as usize] - i) > MIN_EDGE_GENE
             && cross_mask(i, last[(i % 3) as usize], mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = i;
-            (*nodes.offset(nn as isize)).type_ = ATG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = i;
+            (*node).type_ = ATG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).edge = 1;
-            (*nodes.offset(nn as isize)).stop_val = last[(i % 3) as usize];
-            (*nodes.offset(nn as isize)).strand = 1;
+            (*node).edge = 1;
+            (*node).stop_val = last[(i % 3) as usize];
+            (*node).strand = 1;
             nn += 1;
         }
         i -= 1;
     }
     for i in 0..3 {
         if saw_start[(i % 3) as usize] == 1 {
+            let node = clear_next_node(nodes, nn);
             if is_stop(seq, last[(i % 3) as usize], tinf) == 0 {
-                (*nodes.offset(nn as isize)).edge = 1;
+                (*node).edge = 1;
             }
-            (*nodes.offset(nn as isize)).ndx = last[(i % 3) as usize];
-            (*nodes.offset(nn as isize)).type_ = STOP;
-            (*nodes.offset(nn as isize)).strand = 1;
-            (*nodes.offset(nn as isize)).stop_val = i - 6;
+            (*node).ndx = last[(i % 3) as usize];
+            (*node).type_ = STOP;
+            (*node).strand = 1;
+            (*node).stop_val = i - 6;
             nn += 1;
         }
     }
@@ -185,13 +198,14 @@ pub unsafe fn add_nodes(
     while i >= 0 {
         if is_stop(rseq, i, tinf) == 1 {
             if saw_start[(i % 3) as usize] == 1 {
+                let node = clear_next_node(nodes, nn);
                 if is_stop(rseq, last[(i % 3) as usize], tinf) == 0 {
-                    (*nodes.offset(nn as isize)).edge = 1;
+                    (*node).edge = 1;
                 }
-                (*nodes.offset(nn as isize)).ndx = slen - last[(i % 3) as usize] - 1;
-                (*nodes.offset(nn as isize)).type_ = STOP;
-                (*nodes.offset(nn as isize)).strand = -1;
-                (*nodes.offset(nn as isize)).stop_val = slen - i - 1;
+                (*node).ndx = slen - last[(i % 3) as usize] - 1;
+                (*node).type_ = STOP;
+                (*node).strand = -1;
+                (*node).stop_val = slen - i - 1;
                 nn += 1;
             }
             min_dist[(i % 3) as usize] = MIN_GENE;
@@ -210,58 +224,63 @@ pub unsafe fn add_nodes(
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
-            (*nodes.offset(nn as isize)).type_ = ATG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = slen - i - 1;
+            (*node).type_ = ATG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
-            (*nodes.offset(nn as isize)).strand = -1;
+            (*node).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*node).strand = -1;
             nn += 1;
         } else if is_start(rseq, i, tinf) == 1
             && is_gtg(rseq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
-            (*nodes.offset(nn as isize)).type_ = GTG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = slen - i - 1;
+            (*node).type_ = GTG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
-            (*nodes.offset(nn as isize)).strand = -1;
+            (*node).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*node).strand = -1;
             nn += 1;
         } else if is_start(rseq, i, tinf) == 1
             && is_ttg(rseq, i) == 1
             && (last[(i % 3) as usize] - i + 3) >= min_dist[(i % 3) as usize]
             && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
-            (*nodes.offset(nn as isize)).type_ = TTG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = slen - i - 1;
+            (*node).type_ = TTG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
-            (*nodes.offset(nn as isize)).strand = -1;
+            (*node).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*node).strand = -1;
             nn += 1;
         } else if i <= 2
             && closed == 0
             && (last[(i % 3) as usize] - i) > MIN_EDGE_GENE
             && cross_mask(slen - last[(i % 3) as usize] - 1, slen - i - 1, mlist, nm) == 0
         {
-            (*nodes.offset(nn as isize)).ndx = slen - i - 1;
-            (*nodes.offset(nn as isize)).type_ = ATG;
+            let node = clear_next_node(nodes, nn);
+            (*node).ndx = slen - i - 1;
+            (*node).type_ = ATG;
             saw_start[(i % 3) as usize] = 1;
-            (*nodes.offset(nn as isize)).edge = 1;
-            (*nodes.offset(nn as isize)).stop_val = slen - last[(i % 3) as usize] - 1;
-            (*nodes.offset(nn as isize)).strand = -1;
+            (*node).edge = 1;
+            (*node).stop_val = slen - last[(i % 3) as usize] - 1;
+            (*node).strand = -1;
             nn += 1;
         }
         i -= 1;
     }
     for i in 0..3 {
         if saw_start[(i % 3) as usize] == 1 {
+            let node = clear_next_node(nodes, nn);
             if is_stop(rseq, last[(i % 3) as usize], tinf) == 0 {
-                (*nodes.offset(nn as isize)).edge = 1;
+                (*node).edge = 1;
             }
-            (*nodes.offset(nn as isize)).ndx = slen - last[(i % 3) as usize] - 1;
-            (*nodes.offset(nn as isize)).type_ = STOP;
-            (*nodes.offset(nn as isize)).strand = -1;
-            (*nodes.offset(nn as isize)).stop_val = slen - i + 5;
+            (*node).ndx = slen - last[(i % 3) as usize] - 1;
+            (*node).type_ = STOP;
+            (*node).strand = -1;
+            (*node).stop_val = slen - i + 5;
             nn += 1;
         }
     }

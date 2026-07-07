@@ -8,6 +8,7 @@
 *******************************************************************************/
 
 use std::ffi::CStr;
+use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_int, c_void};
 
 use crate::types::{Gene, Mask, MetagenomicBin, Node, Training};
@@ -136,18 +137,19 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
     let mut nuc_ptr: c_int;
     let mut input_ptr: *mut c_void = std::ptr::null_mut();
 
-    // Allocate memory using Vec
+    // Reserve the same C-style work buffers without touching every page up
+    // front. Nodes and genes are zeroed as individual records are emitted.
     let mut seq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 4];
     let mut rseq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 4];
     let mut useq_vec: Vec<u8> = vec![0u8; MAX_SEQ / 8];
-    let mut nodes_vec: Vec<Node> = vec![unsafe { std::mem::zeroed() }; STT_NOD];
-    let mut genes_vec: Vec<Gene> = vec![unsafe { std::mem::zeroed() }; MAX_GENES];
+    let mut nodes_vec: Vec<MaybeUninit<Node>> = Vec::with_capacity(STT_NOD);
+    let mut genes_vec: Vec<MaybeUninit<Gene>> = Vec::with_capacity(MAX_GENES);
 
     let seq = seq_vec.as_mut_ptr();
     let rseq = rseq_vec.as_mut_ptr();
     let useq = useq_vec.as_mut_ptr();
-    let mut nodes = nodes_vec.as_mut_ptr();
-    let genes = genes_vec.as_mut_ptr();
+    let mut nodes = nodes_vec.as_mut_ptr() as *mut Node;
+    let genes = genes_vec.as_mut_ptr() as *mut Gene;
 
     let mut tinf: Training = std::mem::zeroed();
 
@@ -337,8 +339,10 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         }
         if slen > max_slen && slen > (STT_NOD as c_int) * 8 {
             let new_size = slen as usize / 8;
-            nodes_vec.resize(new_size, std::mem::zeroed());
-            nodes = nodes_vec.as_mut_ptr();
+            if nodes_vec.capacity() < new_size {
+                nodes_vec.reserve_exact(new_size - nodes_vec.capacity());
+            }
+            nodes = nodes_vec.as_mut_ptr() as *mut Node;
             max_slen = slen;
         }
         nn = add_nodes(
@@ -351,7 +355,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
             nmask,
             &mut tinf,
         );
-        nodes_vec[..nn as usize]
+        std::slice::from_raw_parts_mut(nodes, nn as usize)
             .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
         if quiet == 0 {
             eprintln!("{} nodes", nn);
@@ -542,8 +546,10 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
         // Reallocate if this is the biggest sequence we've seen
         if slen > max_slen && slen > (STT_NOD as c_int) * 8 {
             let new_size = slen as usize / 8;
-            nodes_vec.resize(new_size, std::mem::zeroed());
-            nodes = nodes_vec.as_mut_ptr();
+            if nodes_vec.capacity() < new_size {
+                nodes_vec.reserve_exact(new_size - nodes_vec.capacity());
+            }
+            nodes = nodes_vec.as_mut_ptr() as *mut Node;
             max_slen = slen;
         }
 
@@ -562,7 +568,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 nmask,
                 &mut tinf,
             );
-            nodes_vec[..nn as usize]
+            std::slice::from_raw_parts_mut(nodes, nn as usize)
                 .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
 
             score_nodes(seq, rseq, slen, nodes, nn, &mut tinf, closed, is_meta);
@@ -663,7 +669,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                         nmask,
                         &mut meta_tinf,
                     );
-                    nodes_vec[..nn as usize]
+                    std::slice::from_raw_parts_mut(nodes, nn as usize)
                         .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
                 }
                 if meta_gc[mi as usize] < low || meta_gc[mi as usize] > high {
@@ -697,7 +703,7 @@ pub unsafe fn run_pipeline(config: &PipelineConfig) -> i32 {
                 nmask,
                 &mut best_tinf,
             );
-            nodes_vec[..nn as usize]
+            std::slice::from_raw_parts_mut(nodes, nn as usize)
                 .sort_unstable_by(|a, b| a.ndx.cmp(&b.ndx).then(b.strand.cmp(&a.strand)));
             score_nodes(seq, rseq, slen, nodes, nn, &mut best_tinf, closed, is_meta);
             if start_ptr != stdout_fd {
