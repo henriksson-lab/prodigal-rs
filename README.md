@@ -4,6 +4,8 @@ Pure Rust translation of [Prodigal](https://github.com/hyattpd/Prodigal) — a p
 
 Based on Prodigal commit [`c1e2d36`](https://github.com/hyattpd/Prodigal/commit/c1e2d361479cc1b18175ea79ebd8ff10411c46cb) (v2.6.3).
 
+**More work is needed for this translation to be pure Rust**
+
 * 2026-07-07 - RSS fix
 * 2026-05-26 - new audit. only improved performance, now on par or faster
 * 2026-05-16 - docstrings
@@ -237,14 +239,18 @@ cargo package --allow-dirty
 
 Local release-build comparison against the bundled original C `Prodigal/prodigal`, using `/usr/bin/time -f "%e %M"` on real FASTA inputs already present in the workspace. Three-run cases report median wall time. These are evaluation benchmarks only; they are not meant as a general performance claim across environments.
 
+Original benchmark baseline: Prodigal v2.6.3 at commit `c1e2d361479cc1b18175ea79ebd8ff10411c46cb`.
+
+Detailed commands and per-trial rows for the current rerun are staged in `benchmarks/prodigal.tsv` in the presentation repo.
+
 | Dataset | Mode | Input | C wall | Rust wall | Rust/C | C max RSS | Rust max RSS | Rust/C RSS |
 |-------|------|------:|------:|---------:|------:|----------:|-------------:|-----------:|
-| `prokka genome` | `single` | 6.7 MB | 17.84 s | 10.85 s | 0.61x | 172164 KB | 174400 KB | 1.01x |
-| `prokka genome` | `meta` | 6.7 MB | 88.78 s | 50.17 s | 0.57x | 127712 KB | 111360 KB | 0.87x |
-| `prokka plasmid` | `single` | small | 0.08 s | 0.05 s | 0.63x | 4160 KB | 5760 KB | 1.38x |
-| `prokka plasmid` | `meta` | small | 0.32 s | 0.19 s | 0.59x | 43200 KB | 32960 KB | 0.76x |
+| `prokka genome` | `single` | 6.7 MB | 13.37 s | 8.61 s | 0.64x | 172920 KB | 174400 KB | 1.01x |
+| `prokka genome` | `meta` | 6.7 MB | 58.01 s | 37.31 s | 0.64x | 127712 KB | 111680 KB | 0.87x |
+| `prokka plasmid` | `single` | small | 0.08 s | 0.05 s | 0.63x | 4480 KB | 5760 KB | 1.29x |
+| `prokka plasmid` | `meta` | small | 0.26 s | 0.17 s | 0.65x | 43200 KB | 33280 KB | 0.77x |
 
-Current memory note: after switching the CLI work buffers to reserve node/gene storage without eagerly zeroing the full capacity, peak RSS is now roughly at parity with the bundled C binary on the full single-genome run (1.01x Rust/C) and lower than C on the measured metagenomic runs (0.87x on the full genome, 0.76x on the plasmid). Tiny single-genome inputs still show a small fixed Rust overhead (1.38x here), but the previous large fixed RSS floor has been removed.
+Current memory note: after switching the CLI work buffers to reserve node/gene storage without eagerly zeroing the full capacity, peak RSS is now roughly at parity with the bundled C binary on the full single-genome run (1.01x Rust/C) and lower than C on the measured metagenomic runs (0.87x on the full genome, 0.77x on the plasmid). Tiny single-genome inputs still show a small fixed Rust overhead (1.29x here), but the previous large fixed RSS floor has been removed.
 
 ## License
 
@@ -252,4 +258,13 @@ GPL-3.0 (same as the original Prodigal).
 
 ## Citing
 
-Hyatt, D., Chen, GL., LoCascio, P.F. et al. Prodigal: prokaryotic gene recognition and translation initiation site identification. BMC Bioinformatics 11, 119 (2010). doi:10.1186/1471-2105-11-119.
+Please cite the original software
+
+> Hyatt, D., Chen, GL., LoCascio, P.F. et al. Prodigal: prokaryotic gene recognition and translation initiation site identification. BMC Bioinformatics 11, 119 (2010). doi:10.1186/1471-2105-11-119.
+
+If you use our translation, we recommend that you also cite the precise version you use. If you link to [crates.io](http://crates.io), you can cite the version number;
+but if you link to our Git repository, for reproducibility, it is better that you provide the URL to the repository and the git hash (Github lists it high up on the page as 7 letters, under the Code button, e.g. '21751cd')
+
+In addition, we appreciate if you cite the paper below describing the translation approach. If for some reason you struggle with journal citation limits, please prioritizing citing the original software over our translation paper.
+
+> Johan Henriksson. Static analysis-guided agentic AI translation enables Rust as a full stack bioinformatics language. arXiv:2608.13029, 2026. https://doi.org/10.48550/arXiv.2608.13029
